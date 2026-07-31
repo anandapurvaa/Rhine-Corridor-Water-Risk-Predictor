@@ -14,3 +14,4 @@ class PegelMeasurement(BaseModel):
     source: str = "pegelonline"
     source_record_hash: str | None = None
     source_url: str | None = None
+    segment_id: str | None = None

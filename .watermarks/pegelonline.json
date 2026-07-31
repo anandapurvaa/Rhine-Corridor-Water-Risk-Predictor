@@ -1,0 +1,7 @@
+{
+  "last_successful_ingestion_ts_utc": "2026-07-31T14:31:44.717255+00:00",
+  "max_observed_measurement_ts_utc": "2026-07-31T16:30:00+02:00",
+  "rows_written": 43,
+  "mode": "incremental",
+  "hours": 24
+}
