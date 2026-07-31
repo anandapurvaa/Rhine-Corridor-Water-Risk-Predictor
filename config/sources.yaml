@@ -1,0 +1,19 @@
+pegelonline:
+  schedule: "0 */3 * * *"
+  path: "/stations.json?includeTimeseries=true"
+  priority_gauges:
+    - Kaub
+    - Duisburg-Ruhrort
+    - Karlsruhe-Maxau
+    - Koblenz
+
+dwd:
+  schedule: "30 */6 * * *"
+  product_hint: "hourly climate / precipitation / temperature"
+
+smard:
+  schedule: "15 */2 * * *"
+  series:
+    - electricity_spot_price
+    - total_load
+    - renewable_share

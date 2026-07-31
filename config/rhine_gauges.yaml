@@ -1,0 +1,39 @@
+rhine_priority_gauges:
+  - BASEL-RHEINHALLE
+  - RHEINWEILER
+  - BREISACH
+  - IFFEZHEIM
+  - MAXAU
+  - SPEYER
+  - MANNHEIM
+  - WORMS
+  - MAINZ
+  - BINGEN
+  - KAUB
+  - SANKT GOAR
+  - KOBLENZ
+  - BONN
+  - KÖLN
+  - DÜSSELDORF
+  - DUISBURG-RUHRORT
+  - WESEL
+  - REES
+  - EMMERICH
+  - LOBITH
+
+rhine_name_keywords:
+  - RHEIN
+  - KAUB
+  - KOBLENZ
+  - KÖLN
+  - DUISBURG
+  - EMMERICH
+  - MAXAU
+  - MAINZ
+  - BINGEN
+  - BONN
+  - WORMS
+  - SPEYER
+  - WESEL
+  - REES
+  - LOBITH

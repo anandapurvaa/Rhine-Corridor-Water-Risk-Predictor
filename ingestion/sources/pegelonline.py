@@ -1,0 +1,211 @@
+from datetime import datetime, timezone
+from urllib.parse import quote
+
+import pandas as pd
+
+from ingestion.common.config import settings
+from ingestion.common.http import get_json
+from ingestion.common.logging_utils import get_logger
+from ingestion.common.schemas import PegelMeasurement
+from ingestion.common.storage import write_local_parquet, write_jsonl
+from ingestion.common.utils import load_yaml
+
+logger = get_logger(__name__)
+
+
+def load_rhine_config() -> dict:
+    return load_yaml("config/rhine_gauges.yaml")
+
+
+def is_rhine_station(station: dict, rhine_cfg: dict) -> bool:
+    name = (station.get("shortname") or station.get("longname") or "").upper()
+
+    if name in set(rhine_cfg["rhine_priority_gauges"]):
+        return True
+
+    for keyword in rhine_cfg["rhine_name_keywords"]:
+        if keyword in name:
+            return True
+
+    return False
+
+
+def build_station_identifier(station: dict) -> str:
+    return str(
+        station.get("uuid")
+        or station.get("shortname")
+        or station.get("number")
+    )
+
+
+def build_currentmeasurement_url(station_identifier: str, timeseries_shortname: str) -> str:
+    station_id = quote(str(station_identifier), safe="")
+    ts_name = quote(str(timeseries_shortname), safe="")
+    return f"{settings.pegelonline_base_url}/stations/{station_id}/{ts_name}/currentmeasurement.json"
+
+
+def build_measurements_url(station_identifier: str, timeseries_shortname: str) -> str:
+    station_id = quote(str(station_identifier), safe="")
+    ts_name = quote(str(timeseries_shortname), safe="")
+    return f"{settings.pegelonline_base_url}/stations/{station_id}/{ts_name}/measurements.json"
+
+
+def extract_row_from_currentmeasurement(
+    station: dict,
+    ts: dict,
+    current: dict,
+    ingestion_ts: str,
+) -> dict | None:
+    timestamp_utc = current.get("timestamp")
+    value = current.get("value")
+
+    if timestamp_utc is None:
+        return None
+
+    row = {
+        "station_id": str(station.get("uuid", "")),
+        "station_name": station.get("shortname") or station.get("longname") or "unknown",
+        "timeseries_name": ts.get("shortname", "unknown"),
+        "timestamp_utc": timestamp_utc,
+        "value": value,
+        "unit": ts.get("unit"),
+        "latitude": station.get("latitude"),
+        "longitude": station.get("longitude"),
+        "ingestion_ts_utc": ingestion_ts,
+        "source": "pegelonline",
+    }
+
+    return PegelMeasurement(**row).model_dump()
+
+
+def fetch_station_timeseries_measurements(station: dict, mode: str, hours: int) -> list[dict]:
+    ingestion_ts = datetime.now(timezone.utc).isoformat()
+    station_identifier = build_station_identifier(station)
+    station_name = station.get("shortname") or station.get("longname") or "unknown"
+    records = []
+
+    for ts in station.get("timeseries", []) or []:
+        ts_name = ts.get("shortname")
+        if not ts_name:
+            continue
+
+        current_from_station_payload = ts.get("currentMeasurement") or {}
+        if current_from_station_payload.get("timestamp") is not None:
+            try:
+                row = extract_row_from_currentmeasurement(
+                    station=station,
+                    ts=ts,
+                    current=current_from_station_payload,
+                    ingestion_ts=ingestion_ts,
+                )
+                if row:
+                    records.append(row)
+                    continue
+            except Exception as exc:
+                logger.warning(
+                    "embedded_currentmeasurement_parse_failed station=%s timeseries=%s error=%s",
+                    station_name,
+                    ts_name,
+                    exc,
+                )
+
+        current_url = build_currentmeasurement_url(station_identifier, ts_name)
+
+        try:
+            current_payload = get_json(current_url)
+            row = extract_row_from_currentmeasurement(
+                station=station,
+                ts=ts,
+                current=current_payload or {},
+                ingestion_ts=ingestion_ts,
+            )
+            if row:
+                records.append(row)
+                continue
+        except Exception as exc:
+            logger.warning(
+                "currentmeasurement_fetch_failed station=%s timeseries=%s url=%s error=%s",
+                station_name,
+                ts_name,
+                current_url,
+                exc,
+            )
+
+        if mode == "backfill":
+            measurements_url = build_measurements_url(station_identifier, ts_name)
+            try:
+                measurements_payload = get_json(measurements_url)
+                if isinstance(measurements_payload, list) and measurements_payload:
+                    latest = measurements_payload[-1]
+                    row = extract_row_from_currentmeasurement(
+                        station=station,
+                        ts=ts,
+                        current=latest,
+                        ingestion_ts=ingestion_ts,
+                    )
+                    if row:
+                        records.append(row)
+            except Exception as exc:
+                logger.warning(
+                    "measurements_fetch_failed station=%s timeseries=%s url=%s error=%s",
+                    station_name,
+                    ts_name,
+                    measurements_url,
+                    exc,
+                )
+
+    return records
+
+
+def run_pegelonline_ingestion(mode: str = "incremental", hours: int = 72) -> None:
+    url = f"{settings.pegelonline_base_url}/stations.json?includeTimeseries=true&includeCurrentMeasurement=true"
+    logger.info("fetch_start source=pegelonline url=%s mode=%s hours=%s", url, mode, hours)
+
+    payload = get_json(url)
+    rhine_cfg = load_rhine_config()
+
+    rhine_stations = [station for station in payload if is_rhine_station(station, rhine_cfg)]
+    logger.info(
+        "rhine_filter_complete total_stations=%s rhine_stations=%s",
+        len(payload),
+        len(rhine_stations),
+    )
+
+    records = []
+    station_failed = 0
+
+    for station in rhine_stations:
+        try:
+            station_records = fetch_station_timeseries_measurements(
+                station=station,
+                mode=mode,
+                hours=hours,
+            )
+            records.extend(station_records)
+        except Exception as exc:
+            station_failed += 1
+            logger.warning(
+                "station_parse_failed station=%s error=%s",
+                station.get("shortname"),
+                exc,
+            )
+
+    df = pd.DataFrame(records)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+    if not df.empty:
+        df = (
+            df.sort_values(["station_name", "timeseries_name", "timestamp_utc"])
+              .drop_duplicates(subset=["station_id", "timeseries_name", "timestamp_utc"], keep="last")
+              .reset_index(drop=True)
+        )
+        write_local_parquet(df, f"data/raw/pegelonline/pegelonline_{stamp}.parquet")
+        write_jsonl(df.to_dict(orient="records"), f"data/raw/pegelonline/pegelonline_{stamp}.jsonl")
+
+    logger.info(
+        "fetch_complete source=pegelonline rows=%s rhine_stations=%s stations_failed=%s unique_stations=%s",
+        len(df),
+        len(rhine_stations),
+        station_failed,
+        df["station_id"].nunique() if not df.empty else 0,
+    )

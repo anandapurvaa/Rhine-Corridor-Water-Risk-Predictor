@@ -1,0 +1,12 @@
+[
+  {"name":"station_id","type":"STRING","mode":"NULLABLE"},
+  {"name":"station_name","type":"STRING","mode":"NULLABLE"},
+  {"name":"timeseries_name","type":"STRING","mode":"NULLABLE"},
+  {"name":"timestamp_utc","type":"TIMESTAMP","mode":"NULLABLE"},
+  {"name":"value","type":"FLOAT","mode":"NULLABLE"},
+  {"name":"unit","type":"STRING","mode":"NULLABLE"},
+  {"name":"latitude","type":"FLOAT","mode":"NULLABLE"},
+  {"name":"longitude","type":"FLOAT","mode":"NULLABLE"},
+  {"name":"ingestion_ts_utc","type":"TIMESTAMP","mode":"NULLABLE"},
+  {"name":"source","type":"STRING","mode":"NULLABLE"}
+]

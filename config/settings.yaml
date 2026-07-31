@@ -1,0 +1,13 @@
+project_name: rheinkorridor-sentinel
+timezone: Europe/Berlin
+default_backfill_hours: 72
+write_disposition: append
+
+retry:
+  attempts: 3
+  wait_seconds: 2
+
+sources_enabled:
+  - pegelonline
+  - dwd
+  - smard
