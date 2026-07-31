@@ -10,7 +10,9 @@ CREATE TABLE IF NOT EXISTS `rhein_raw.pegelonline_measurements` (
   latitude FLOAT64,
   longitude FLOAT64,
   ingestion_ts_utc TIMESTAMP,
-  source STRING
+  source STRING,
+  source_record_hash STRING,
+  source_url STRING
 )
 PARTITION BY DATE(ingestion_ts_utc)
-CLUSTER BY station_name, timeseries_name;
+CLUSTER BY station_name, timeseries_name, source_record_hash;

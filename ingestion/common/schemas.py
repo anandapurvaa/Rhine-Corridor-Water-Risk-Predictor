@@ -12,3 +12,5 @@ class PegelMeasurement(BaseModel):
     longitude: float | None = None
     ingestion_ts_utc: str
     source: str = "pegelonline"
+    source_record_hash: str | None = None
+    source_url: str | None = None

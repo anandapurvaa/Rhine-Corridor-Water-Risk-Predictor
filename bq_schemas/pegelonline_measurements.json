@@ -8,5 +8,7 @@
   {"name":"latitude","type":"FLOAT","mode":"NULLABLE"},
   {"name":"longitude","type":"FLOAT","mode":"NULLABLE"},
   {"name":"ingestion_ts_utc","type":"TIMESTAMP","mode":"NULLABLE"},
-  {"name":"source","type":"STRING","mode":"NULLABLE"}
+  {"name":"source","type":"STRING","mode":"NULLABLE"},
+  {"name":"source_record_hash","type":"STRING","mode":"NULLABLE"},
+  {"name":"source_url","type":"STRING","mode":"NULLABLE"}
 ]

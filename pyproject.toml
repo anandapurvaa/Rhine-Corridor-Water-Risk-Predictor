@@ -1,0 +1,9 @@
+[project]
+name = "rheinkorridor-sentinel"
+version = "0.1.0"
+description = "Ingestion and forecasting pipeline for Rhine navigability and freight disruption risk"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

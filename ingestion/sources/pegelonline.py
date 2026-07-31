@@ -3,7 +3,9 @@ from urllib.parse import quote
 
 import pandas as pd
 
+from ingestion.common.bigquery_writer import write_dataframe_to_bigquery
 from ingestion.common.config import settings
+from ingestion.common.hashing import stable_record_hash
 from ingestion.common.http import get_json
 from ingestion.common.logging_utils import get_logger
 from ingestion.common.schemas import PegelMeasurement
@@ -50,11 +52,20 @@ def build_measurements_url(station_identifier: str, timeseries_shortname: str) -
     return f"{settings.pegelonline_base_url}/stations/{station_id}/{ts_name}/measurements.json"
 
 
+def attach_record_hash(row: dict) -> dict:
+    row["source_record_hash"] = stable_record_hash(
+        row,
+        keys=["station_id", "timeseries_name", "timestamp_utc", "value", "source"],
+    )
+    return row
+
+
 def extract_row_from_currentmeasurement(
     station: dict,
     ts: dict,
     current: dict,
     ingestion_ts: str,
+    source_url: str,
 ) -> dict | None:
     timestamp_utc = current.get("timestamp")
     value = current.get("value")
@@ -73,8 +84,10 @@ def extract_row_from_currentmeasurement(
         "longitude": station.get("longitude"),
         "ingestion_ts_utc": ingestion_ts,
         "source": "pegelonline",
+        "source_url": source_url,
     }
 
+    row = attach_record_hash(row)
     return PegelMeasurement(**row).model_dump()
 
 
@@ -97,6 +110,7 @@ def fetch_station_timeseries_measurements(station: dict, mode: str, hours: int) 
                     ts=ts,
                     current=current_from_station_payload,
                     ingestion_ts=ingestion_ts,
+                    source_url="embedded_station_payload",
                 )
                 if row:
                     records.append(row)
@@ -118,6 +132,7 @@ def fetch_station_timeseries_measurements(station: dict, mode: str, hours: int) 
                 ts=ts,
                 current=current_payload or {},
                 ingestion_ts=ingestion_ts,
+                source_url=current_url,
             )
             if row:
                 records.append(row)
@@ -142,6 +157,7 @@ def fetch_station_timeseries_measurements(station: dict, mode: str, hours: int) 
                         ts=ts,
                         current=latest,
                         ingestion_ts=ingestion_ts,
+                        source_url=measurements_url,
                     )
                     if row:
                         records.append(row)
@@ -160,6 +176,12 @@ def fetch_station_timeseries_measurements(station: dict, mode: str, hours: int) 
 def run_pegelonline_ingestion(mode: str = "incremental", hours: int = 72) -> None:
     url = f"{settings.pegelonline_base_url}/stations.json?includeTimeseries=true&includeCurrentMeasurement=true"
     logger.info("fetch_start source=pegelonline url=%s mode=%s hours=%s", url, mode, hours)
+    logger.info(
+        "runtime_settings project_id=%s dataset_raw=%s region=%s",
+        settings.project_id,
+        settings.dataset_raw,
+        settings.gcp_region,
+    )
 
     payload = get_json(url)
     rhine_cfg = load_rhine_config()
@@ -196,11 +218,26 @@ def run_pegelonline_ingestion(mode: str = "incremental", hours: int = 72) -> Non
     if not df.empty:
         df = (
             df.sort_values(["station_name", "timeseries_name", "timestamp_utc"])
-              .drop_duplicates(subset=["station_id", "timeseries_name", "timestamp_utc"], keep="last")
+              .drop_duplicates(subset=["source_record_hash"], keep="last")
               .reset_index(drop=True)
         )
+
+        logger.info(
+            "local_persist_start rows=%s unique_stations=%s",
+            len(df),
+            df["station_id"].nunique() if not df.empty else 0,
+        )
+
         write_local_parquet(df, f"data/raw/pegelonline/pegelonline_{stamp}.parquet")
         write_jsonl(df.to_dict(orient="records"), f"data/raw/pegelonline/pegelonline_{stamp}.jsonl")
+
+        logger.info(
+            "bq_branch_check project_id_present=%s",
+            bool(settings.project_id),
+        )
+
+        if settings.project_id:
+            write_dataframe_to_bigquery(df, table_name="pegelonline_measurements")
 
     logger.info(
         "fetch_complete source=pegelonline rows=%s rhine_stations=%s stations_failed=%s unique_stations=%s",
