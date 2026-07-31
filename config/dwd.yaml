@@ -1,0 +1,25 @@
+base_url: "https://opendata.dwd.de/climate_environment/CDC/observations_germany/climate/hourly"
+
+variables:
+  air_temperature:
+    folder: "air_temperature"
+    historical_subdir: "historical"
+    recent_subdir: "recent"
+
+  precipitation:
+    folder: "precipitation"
+    historical_subdir: "historical"
+    recent_subdir: "recent"
+
+  pressure:
+    folder: "pressure"
+    historical_subdir: "historical"
+    recent_subdir: "recent"
+
+  wind:
+    folder: "wind"
+    historical_subdir: "historical"
+    recent_subdir: "recent"
+
+raw_output_dir: "data/raw/dwd_hourly"
+timezone_name: "UTC"

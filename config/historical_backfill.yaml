@@ -1,0 +1,6 @@
+pegelonline:
+  archive_base_url: "https://www.pegelonline.wsv.de/webservices/files/Wasserstand+Rohdaten/RHEIN"
+  default_chunk_months: 1
+  start_date_min: "2000-01-01"
+  raw_output_dir: "data/raw/pegelonline_historical"
+  timezone_name: "Europe/Berlin"

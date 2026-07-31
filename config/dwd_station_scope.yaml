@@ -1,0 +1,26 @@
+target_station_ids: []
+
+target_station_names:
+  - "BASEL"
+  - "RHEINFELDEN"
+  - "FREIBURG"
+  - "KARLSRUHE"
+  - "RHEINSTETTEN"
+  - "MANNHEIM"
+  - "MAINZ"
+  - "KOBLENZ"
+  - "BONN"
+  - "KÖLN"
+  - "KOELN"
+  - "DÜSSELDORF"
+  - "DUESSELDORF"
+  - "WESEL"
+  - "EMMERICH"
+
+bounding_box:
+  min_lat: 47.4
+  max_lat: 51.9
+  min_lon: 7.0
+  max_lon: 8.7
+
+max_station_count: 25
