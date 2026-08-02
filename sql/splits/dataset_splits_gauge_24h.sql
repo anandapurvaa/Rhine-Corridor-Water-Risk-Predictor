@@ -4,17 +4,23 @@ WITH base AS (
   FROM `rhine-corridor-navigator.rhein_curated.supervised_gauge_24h_multisource`
   WHERE target_value_t_plus_24h IS NOT NULL
 ),
-ranked AS (
+numbered AS (
   SELECT
     *,
-    PERCENT_RANK() OVER (ORDER BY timestamp_utc) AS pr
+    ROW_NUMBER() OVER (
+      PARTITION BY station_id, timeseries_name
+      ORDER BY timestamp_utc
+    ) AS rn,
+    COUNT(*) OVER (
+      PARTITION BY station_id, timeseries_name
+    ) AS n
   FROM base
 )
 SELECT
   *,
   CASE
-    WHEN pr < 0.70 THEN 'train'
-    WHEN pr < 0.85 THEN 'validation'
+    WHEN rn <= CAST(n * 0.70 AS INT64) THEN 'train'
+    WHEN rn <= CAST(n * 0.85 AS INT64) THEN 'validation'
     ELSE 'test'
   END AS split_name
-FROM ranked;
+FROM numbered;

@@ -1,41 +1,47 @@
 CREATE OR REPLACE TABLE `rhine-corridor-navigator.rhein_curated.supervised_gauge_72h` AS
 WITH base AS (
-  SELECT *
+  SELECT
+    station_id,
+    station_name,
+    timeseries_name,
+    timestamp_utc,
+    value,
+    unit,
+    latitude,
+    longitude,
+    ingestion_ts_utc,
+    source,
+    source_record_hash,
+    source_url,
+    LEAD(value, 1) OVER w AS lead_1,
+    LEAD(value, 3) OVER w AS lead_3,
+    LEAD(value, 6) OVER w AS lead_6,
+    LEAD(value, 12) OVER w AS lead_12,
+    LEAD(value, 24) OVER w AS lead_24,
+    LEAD(value, 36) OVER w AS lead_36,
+    LEAD(value, 48) OVER w AS lead_48,
+    LEAD(value, 60) OVER w AS lead_60,
+    LEAD(value, 72) OVER w AS lead_72
   FROM `rhine-corridor-navigator.rhein_curated.feature_gauge_timeseries`
   WHERE timeseries_name = 'W'
-),
-future_labels AS (
-  SELECT
-    a.station_name,
-    a.timestamp_utc,
-    MAX(
-      CASE
-        WHEN b.station_name = 'KAUB' AND b.value <= 120 THEN 1
-        WHEN b.station_name = 'MAXAU' AND b.value <= 380 THEN 1
-        WHEN b.station_name = 'KOBLENZ' AND b.value <= 150 THEN 1
-        WHEN b.station_name = 'DUISBURG-RUHRORT' AND b.value <= 260 THEN 1
-        WHEN b.station_name = 'EMMERICH' AND b.value <= 140 THEN 1
-        WHEN b.station_name = 'KÖLN' AND b.value <= 180 THEN 1
-        WHEN b.station_name = 'MAINZ' AND b.value <= 170 THEN 1
-        WHEN b.station_name = 'WORMS' AND b.value <= 120 THEN 1
-        WHEN b.station_name = 'SPEYER' AND b.value <= 200 THEN 1
-        WHEN b.station_name = 'BONN' AND b.value <= 170 THEN 1
-        WHEN b.station_name = 'DÜSSELDORF' AND b.value <= 190 THEN 1
-        WHEN b.station_name = 'REES' AND b.value <= 160 THEN 1
-        ELSE 0
-      END
-    ) AS target_low_water_72h
-  FROM base a
-  LEFT JOIN base b
-    ON a.station_name = b.station_name
-   AND b.timestamp_utc > a.timestamp_utc
-   AND b.timestamp_utc <= TIMESTAMP_ADD(a.timestamp_utc, INTERVAL 72 HOUR)
-  GROUP BY a.station_name, a.timestamp_utc
+  WINDOW w AS (
+    PARTITION BY station_name, timeseries_name
+    ORDER BY timestamp_utc
+  )
 )
 SELECT
-  a.*,
-  f.target_low_water_72h
-FROM base a
-LEFT JOIN future_labels f
-  ON a.station_name = f.station_name
- AND a.timestamp_utc = f.timestamp_utc;
+  *,
+  CASE
+    WHEN GREATEST(
+      COALESCE(lead_1 <= 120, FALSE),
+      COALESCE(lead_3 <= 120, FALSE),
+      COALESCE(lead_6 <= 120, FALSE),
+      COALESCE(lead_12 <= 120, FALSE),
+      COALESCE(lead_24 <= 120, FALSE),
+      COALESCE(lead_36 <= 120, FALSE),
+      COALESCE(lead_48 <= 120, FALSE),
+      COALESCE(lead_60 <= 120, FALSE),
+      COALESCE(lead_72 <= 120, FALSE)
+    ) THEN 1 ELSE 0
+  END AS target_low_water_72h
+FROM base;

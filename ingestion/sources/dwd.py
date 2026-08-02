@@ -4,7 +4,7 @@ import re
 import pandas as pd
 import requests
 
-from ingestion.common.bigquery_writer import write_dataframe_to_bigquery
+from ingestion.common.bigquery_dedup import merge_dataframe_to_bigquery
 from ingestion.common.config import settings
 from ingestion.common.logging_utils import get_logger
 from ingestion.common.storage import write_jsonl, write_local_parquet
@@ -103,32 +103,39 @@ def fetch_station_meta(base_url: str) -> pd.DataFrame:
     stations_url = f"{base_url}/air_temperature/recent/TU_Stundenwerte_Beschreibung_Stationen.txt"
     raw_bytes = fetch_bytes(stations_url)
     lines = raw_bytes.decode("latin1").splitlines()
-    
+
     parsed_data = []
-    
+
     for line in lines[2:]:
         if not line.strip():
             continue
-            
+
         parts = line.split()
         if len(parts) < 8:
             continue
-            
-        parsed_data.append({
-            "Stations_id": parts[0].strip(),
-            "von_datum": parts[1].strip(),
-            "bis_datum": parts[2].strip(),
-            "Stationshoehe": parts[3].strip(),
-            "geoBreite": parts[4].strip(),
-            "geoLaenge": parts[5].strip(),
-            "Stationsname": " ".join(parts[6:-1]).strip(),
-            "Bundesland": parts[-1].strip()
-        })
-        
+
+        parsed_data.append(
+            {
+                "Stations_id": parts[0].strip(),
+                "von_datum": parts[1].strip(),
+                "bis_datum": parts[2].strip(),
+                "Stationshoehe": parts[3].strip(),
+                "geoBreite": parts[4].strip(),
+                "geoLaenge": parts[5].strip(),
+                "Stationsname": " ".join(parts[6:-1]).strip(),
+                "Bundesland": parts[-1].strip(),
+            }
+        )
+
     return pd.DataFrame(parsed_data)
 
 
-def fetch_latest_variable_frame(base_url: str, variable_key: str, variable_cfg: dict, valid_station_ids: set[str]) -> list[tuple[str, pd.DataFrame]]:
+def fetch_latest_variable_frame(
+    base_url: str,
+    variable_key: str,
+    variable_cfg: dict,
+    valid_station_ids: set[str],
+) -> list[tuple[str, pd.DataFrame]]:
     index_url = f"{base_url}/{variable_cfg['folder']}/{variable_cfg['recent_subdir']}/"
     html = fetch_text(index_url)
     zip_links = extract_zip_links(html)
@@ -137,7 +144,7 @@ def fetch_latest_variable_frame(base_url: str, variable_key: str, variable_cfg: 
     for link in zip_links:
         if not any(sid in link for sid in valid_station_ids):
             continue
-            
+
         full_url = index_url + link
         content = fetch_bytes(full_url)
         raw_df = parse_dwd_zip_bytes(content)
@@ -152,7 +159,6 @@ def merge_variable_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
 
     cleaned_frames = [df.dropna(axis=1, how="all") for df in frames]
     combined = pd.concat(cleaned_frames, ignore_index=True)
-
     merged = combined.groupby(["dwd_station_id", "timestamp_utc"], as_index=False).first()
 
     return merged
@@ -180,22 +186,21 @@ def run_dwd_ingestion(mode: str = "recent") -> None:
             axis=1,
         )
     ].copy()
-    max_station_count = int(scope_cfg.get("max_station_count", 25))
 
+    max_station_count = int(scope_cfg.get("max_station_count", 25))
     station_meta = station_meta.sort_values(["Stations_id"]).head(max_station_count).copy()
 
     logger.info(
         "dwd_station_scope_complete scoped_stations=%s max_station_count=%s",
         len(station_meta),
         max_station_count,
-)
-    
+    )
+
     if station_meta.empty:
         logger.info("dwd_fetch_complete rows=0")
         return
 
     valid_station_ids = set(station_meta["Stations_id"].astype(str).str.zfill(5))
-
     canonical_frames = []
 
     for variable_key, variable_cfg in cfg["variables"].items():
@@ -239,22 +244,19 @@ def run_dwd_ingestion(mode: str = "recent") -> None:
     ].drop_duplicates(subset=["source_record_hash"], keep="last")
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        
-        # 1. Write Parquet (Parquet natively supports and prefers Pandas Timestamps)
+
     write_local_parquet(merged, f"{raw_output_dir}/dwd_hourly_{stamp}.parquet")
-        
-        # 2. Write JSONL (Requires converting Timestamps to strings first)
+
     json_df = merged.copy()
     json_df["timestamp_utc"] = json_df["timestamp_utc"].dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     json_df["ingestion_ts_utc"] = json_df["ingestion_ts_utc"].dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     write_jsonl(json_df.to_dict(orient="records"), f"{raw_output_dir}/dwd_hourly_{stamp}.jsonl")
 
-        # 3. Write to BigQuery (Uses the original merged dataframe with native Timestamps)
     if settings.project_id:
-            write_dataframe_to_bigquery(merged, table_name="dwd_hourly_observations")
+        merge_dataframe_to_bigquery(merged, table_name="dwd_hourly_observations")
 
     logger.info(
-            "dwd_fetch_complete rows=%s unique_stations=%s",
-            len(merged),
-            merged["dwd_station_id"].nunique() if not merged.empty else 0,
-        )
+        "dwd_fetch_complete rows=%s unique_stations=%s",
+        len(merged),
+        merged["dwd_station_id"].nunique() if not merged.empty else 0,
+    )

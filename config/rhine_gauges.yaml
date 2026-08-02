@@ -1,25 +1,40 @@
 rhine_priority_gauges:
-  - BASEL-RHEINHALLE
-  - RHEINWEILER
-  - BREISACH
-  - IFFEZHEIM
-  - MAXAU
-  - SPEYER
-  - MANNHEIM
-  - WORMS
-  - MAINZ
+  - ANDERNACH
   - BINGEN
-  - KAUB
-  - SANKT GOAR
-  - KOBLENZ
   - BONN
-  - KÖLN
-  - DÜSSELDORF
+  - BOPPARD
+  - BRAUBACH
+  - BREISACH
+  - BASEL-RHEINHALLE
+  - BODENHEIM
   - DUISBURG-RUHRORT
-  - WESEL
-  - REES
+  - DÜSSELDORF
   - EMMERICH
+  - IFFEZHEIM
+  - KAUB
+  - KEHL-KRONENHOF
+  - KOBLENZ
+  - KONSTANZ-RHEIN
+  - KÖLN
   - LOBITH
+  - MAINZ
+  - MANNHEIM
+  - MAXAU
+  - NIERSTEIN-OPPENHEIM
+  - NEUWIED STADT
+  - OBERWINTER
+  - OESTRICH
+  - OTTENHEIM
+  - PANNERDENSE KOP
+  - PHILIPPSBURG
+  - PLITTERSDORF
+  - REES
+  - RHEINWEILER
+  - RUST
+  - SANKT GOAR
+  - SPEYER
+  - WESEL
+  - WORMS
 
 rhine_name_keywords:
   - RHEIN
@@ -37,3 +52,19 @@ rhine_name_keywords:
   - WESEL
   - REES
   - LOBITH
+
+historical_missing_stations:
+  - LOBITH
+  - KONSTANZ-RHEIN
+  - BASEL-RHEINHALLE
+  - NEUWIED STADT
+  - PANNERDENSE KOP
+
+historical_csv_root: data/raw/pegelonline_historical
+historical_backfill_start: "2018-01-01"
+historical_backfill_end: "2026-06-19"
+api_handoff_start: "2026-06-20T00:00:00Z"
+
+excluded_stations:
+  - DUISBURG-MEIDERICH LOCK UW
+  - DUISBURG-MEIDERICH LOCK OW
