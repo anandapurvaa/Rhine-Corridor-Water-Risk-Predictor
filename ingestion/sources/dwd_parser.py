@@ -8,16 +8,19 @@ from ingestion.common.hashing import stable_record_hash
 
 def parse_dwd_zip_bytes(content: bytes) -> pd.DataFrame:
     with zipfile.ZipFile(io.BytesIO(content)) as zf:
-        # CORRECTED: Only extract the file containing the actual data (starts with "produkt_")
-        csv_names = [name for name in zf.namelist() if name.lower().startswith("produkt_") and name.lower().endswith(".txt")]
-        if not csv_names:
+        txt_names = [
+            name for name in zf.namelist()
+            if name.lower().startswith("produkt_") and name.lower().endswith(".txt")
+        ]
+        if not txt_names:
             raise ValueError("No produkt_*.txt file found in DWD zip archive")
 
-        with zf.open(csv_names[0]) as f:
-            # CORRECTED: Added latin1 encoding
+        with zf.open(txt_names[0]) as f:
             df = pd.read_csv(f, sep=";", dtype=str, encoding="latin1")
 
     df.columns = [c.strip() for c in df.columns]
+    df = df.apply(lambda col: col.str.strip() if col.dtype == "object" else col)
+    df = df.replace({"": None, "-999": None, "-999.0": None, "####": None})
     return df
 
 
@@ -27,6 +30,14 @@ def normalize_station_id(value: str) -> str:
 
 def parse_dwd_timestamp(series: pd.Series) -> pd.Series:
     return pd.to_datetime(series.astype(str), format="%Y%m%d%H", utc=True, errors="coerce")
+
+
+def _hash_value(value):
+    if pd.isna(value):
+        return None
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    return value
 
 
 def build_canonical_dwd_frame(
@@ -50,11 +61,11 @@ def build_canonical_dwd_frame(
     else:
         out["quality_flag"] = None
 
-    out["temperature_c"] = None
-    out["precipitation_mm"] = None
-    out["wind_speed_ms"] = None
-    out["pressure_hpa"] = None
-    out["relative_humidity_pct"] = None
+    out["temperature_c"] = pd.Series([None] * len(df), dtype="float64")
+    out["precipitation_mm"] = pd.Series([None] * len(df), dtype="float64")
+    out["wind_speed_ms"] = pd.Series([None] * len(df), dtype="float64")
+    out["pressure_hpa"] = pd.Series([None] * len(df), dtype="float64")
+    out["relative_humidity_pct"] = pd.Series([None] * len(df), dtype="float64")
 
     if variable_family == "air_temperature":
         if "TT_TU" in df.columns:
@@ -63,8 +74,6 @@ def build_canonical_dwd_frame(
             out["relative_humidity_pct"] = pd.to_numeric(df["RF_TU"], errors="coerce")
 
     elif variable_family == "precipitation":
-        if "RS_IND" in df.columns:
-            out["precip_indicator"] = pd.to_numeric(df["RS_IND"], errors="coerce")
         if "R1" in df.columns:
             out["precipitation_mm"] = pd.to_numeric(df["R1"], errors="coerce")
         elif "RSK" in df.columns:
@@ -80,20 +89,16 @@ def build_canonical_dwd_frame(
         elif "PP_10" in df.columns:
             out["pressure_hpa"] = pd.to_numeric(df["PP_10"], errors="coerce")
 
-    out["dwd_station_name"] = None
-    out["latitude"] = None
-    out["longitude"] = None
-
-    out["source_record_hash"] = out.apply(
-        lambda row: stable_record_hash(
+    out["source_record_hash"] = [
+        stable_record_hash(
             {
-                "dwd_station_id": row["dwd_station_id"],
-                "timestamp_utc": str(row["timestamp_utc"]),
-                "temperature_c": row.get("temperature_c"),
-                "precipitation_mm": row.get("precipitation_mm"),
-                "wind_speed_ms": row.get("wind_speed_ms"),
-                "pressure_hpa": row.get("pressure_hpa"),
-                "relative_humidity_pct": row.get("relative_humidity_pct"),
+                "dwd_station_id": sid,
+                "timestamp_utc": _hash_value(ts),
+                "temperature_c": _hash_value(temp),
+                "precipitation_mm": _hash_value(prec),
+                "wind_speed_ms": _hash_value(wind),
+                "pressure_hpa": _hash_value(press),
+                "relative_humidity_pct": _hash_value(rh),
                 "source": "dwd",
             },
             keys=[
@@ -106,8 +111,16 @@ def build_canonical_dwd_frame(
                 "relative_humidity_pct",
                 "source",
             ],
-        ),
-        axis=1,
-    )
+        )
+        for sid, ts, temp, prec, wind, press, rh in zip(
+            out["dwd_station_id"].tolist(),
+            out["timestamp_utc"].tolist(),
+            out["temperature_c"].tolist(),
+            out["precipitation_mm"].tolist(),
+            out["wind_speed_ms"].tolist(),
+            out["pressure_hpa"].tolist(),
+            out["relative_humidity_pct"].tolist(),
+        )
+    ]
 
     return out

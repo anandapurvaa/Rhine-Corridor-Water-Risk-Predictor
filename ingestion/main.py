@@ -12,6 +12,25 @@ def default_recent_cutoff() -> str:
     return (date.today() - timedelta(days=1)).isoformat()
 
 
+def run_pegelonline_all(
+    hours: int,
+    from_date: str,
+    to_date: str,
+    chunk_months: int,
+) -> None:
+    run_pegelonline_historical_backfill(
+        from_date=from_date,
+        to_date=to_date,
+        chunk_months=chunk_months,
+    )
+    run_pegelonline_ingestion(mode="incremental", hours=hours)
+
+
+def run_dwd_all() -> None:
+    run_dwd_ingestion(mode="historical")
+    run_dwd_ingestion(mode="recent")
+
+
 def run_source_ingestion(
     source: str,
     mode: str,
@@ -20,25 +39,75 @@ def run_source_ingestion(
     to_date: str | None,
     chunk_months: int,
 ) -> None:
-    if source == "pegelonline" and mode == "historical":
-        if not from_date or not to_date:
-            raise ValueError("historical mode requires --from-date and --to-date")
-        run_pegelonline_historical_backfill(
-            from_date=from_date,
-            to_date=to_date,
-            chunk_months=chunk_months,
-        )
-        return
-
     if source == "pegelonline":
-        run_pegelonline_ingestion(mode=mode, hours=hours)
-        return
+        if mode == "historical":
+            if not from_date or not to_date:
+                raise ValueError("historical mode requires --from-date and --to-date")
+            run_pegelonline_historical_backfill(
+                from_date=from_date,
+                to_date=to_date,
+                chunk_months=chunk_months,
+            )
+            return
+
+        if mode == "recent":
+            run_pegelonline_ingestion(mode="incremental", hours=hours)
+            return
+
+        if mode == "both":
+            if not from_date or not to_date:
+                raise ValueError("both mode requires --from-date and --to-date")
+            run_pegelonline_all(
+                hours=hours,
+                from_date=from_date,
+                to_date=to_date,
+                chunk_months=chunk_months,
+            )
+            return
 
     if source == "dwd":
-        run_dwd_ingestion(mode="recent")
-        return
+        if mode == "historical":
+            run_dwd_ingestion(mode="historical")
+            return
 
-    raise ValueError(f"Unsupported source: {source}")
+        if mode == "recent":
+            run_dwd_ingestion(mode="recent")
+            return
+
+        if mode == "both":
+            run_dwd_all()
+            return
+
+    if source == "all":
+        if mode == "historical":
+            if not from_date or not to_date:
+                raise ValueError("historical mode requires --from-date and --to-date")
+            run_pegelonline_historical_backfill(
+                from_date=from_date,
+                to_date=to_date,
+                chunk_months=chunk_months,
+            )
+            run_dwd_ingestion(mode="historical")
+            return
+
+        if mode == "recent":
+            run_pegelonline_ingestion(mode="incremental", hours=hours)
+            run_dwd_ingestion(mode="recent")
+            return
+
+        if mode == "both":
+            if not from_date or not to_date:
+                raise ValueError("both mode requires --from-date and --to-date")
+            run_pegelonline_all(
+                hours=hours,
+                from_date=from_date,
+                to_date=to_date,
+                chunk_months=chunk_months,
+            )
+            run_dwd_all()
+            return
+
+    raise ValueError(f"Unsupported source/mode combination: source={source}, mode={mode}")
 
 
 def run_full_pipeline(
@@ -48,15 +117,15 @@ def run_full_pipeline(
     pegel_hours: int,
     include_dwd: bool,
 ) -> None:
-    run_pegelonline_historical_backfill(
+    run_pegelonline_all(
+        hours=pegel_hours,
         from_date=pegel_from_date,
         to_date=pegel_to_date,
         chunk_months=chunk_months,
     )
-    run_pegelonline_ingestion(mode="incremental", hours=pegel_hours)
 
     if include_dwd:
-        run_dwd_ingestion(mode="recent")
+        run_dwd_all()
 
     run_stage1_sql()
     run_stage2_sql()
@@ -72,14 +141,14 @@ def main() -> None:
     )
     parser.add_argument(
         "--source",
-        default="pegelonline",
-        choices=["pegelonline", "dwd"],
+        default="all",
+        choices=["pegelonline", "dwd", "all"],
         help="Source to ingest when step includes ingestion",
     )
     parser.add_argument(
         "--mode",
-        default="incremental",
-        choices=["incremental", "historical", "recent"],
+        default="both",
+        choices=["historical", "recent", "both"],
         help="Ingestion mode",
     )
     parser.add_argument("--hours", type=int, default=72)

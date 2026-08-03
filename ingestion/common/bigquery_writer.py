@@ -22,6 +22,28 @@ BQ_PEGELONLINE_SCHEMA = [
     bigquery.SchemaField("source_url", "STRING"),
 ]
 
+BQ_DWD_HOURLY_SCHEMA = [
+    bigquery.SchemaField("dwd_station_id", "STRING"),
+    bigquery.SchemaField("dwd_station_name", "STRING"),
+    bigquery.SchemaField("timestamp_utc", "TIMESTAMP"),
+    bigquery.SchemaField("latitude", "FLOAT64"),
+    bigquery.SchemaField("longitude", "FLOAT64"),
+    bigquery.SchemaField("temperature_c", "FLOAT64"),
+    bigquery.SchemaField("precipitation_mm", "FLOAT64"),
+    bigquery.SchemaField("wind_speed_ms", "FLOAT64"),
+    bigquery.SchemaField("pressure_hpa", "FLOAT64"),
+    bigquery.SchemaField("relative_humidity_pct", "FLOAT64"),
+    bigquery.SchemaField("is_proxy_backfilled", "BOOL"),
+    bigquery.SchemaField("proxy_source_station_id", "STRING"),
+    bigquery.SchemaField("proxy_source_variable", "STRING"),
+    bigquery.SchemaField("proxy_source_distance_km", "FLOAT64"),
+    bigquery.SchemaField("proxy_fill_method", "STRING"),
+    bigquery.SchemaField("ingestion_ts_utc", "TIMESTAMP"),
+    bigquery.SchemaField("source", "STRING"),
+    bigquery.SchemaField("source_record_hash", "STRING"),
+    bigquery.SchemaField("source_url", "STRING"),
+]
+
 
 def normalize_pegelonline_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -37,6 +59,45 @@ def normalize_pegelonline_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
     for col in ["station_id", "station_name", "timeseries_name", "unit", "source", "source_record_hash", "source_url"]:
+        if col in df.columns:
+            df[col] = df[col].astype("string")
+
+    return df
+
+
+def normalize_dwd_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
+    for col in ["timestamp_utc", "ingestion_ts_utc"]:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], utc=True, errors="coerce")
+
+    for col in [
+        "latitude",
+        "longitude",
+        "temperature_c",
+        "precipitation_mm",
+        "wind_speed_ms",
+        "pressure_hpa",
+        "relative_humidity_pct",
+        "proxy_source_distance_km",
+    ]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    if "is_proxy_backfilled" in df.columns:
+        df["is_proxy_backfilled"] = df["is_proxy_backfilled"].astype("boolean")
+
+    for col in [
+        "dwd_station_id",
+        "dwd_station_name",
+        "proxy_source_station_id",
+        "proxy_source_variable",
+        "proxy_fill_method",
+        "source",
+        "source_record_hash",
+        "source_url",
+    ]:
         if col in df.columns:
             df[col] = df[col].astype("string")
 
@@ -67,6 +128,10 @@ def write_dataframe_to_bigquery(
     if table_name == "pegelonline_measurements":
         df = normalize_pegelonline_dataframe(df)
         schema = schema or BQ_PEGELONLINE_SCHEMA
+
+    if table_name == "dwd_hourly_observations":
+        df = normalize_dwd_dataframe(df)
+        schema = schema or BQ_DWD_HOURLY_SCHEMA
 
     logger.info(
         "bq_dtypes table=%s dtypes=%s",

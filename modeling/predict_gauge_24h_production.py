@@ -14,7 +14,7 @@ from modeling.schemas import (
     NUMERIC_COLUMNS_LEAN,
     PRODUCTION_FEATURE_COLUMNS,
     TABLE_NAME,
-    TARGET_COLUMN,
+    TARGET_COLUMN as DEFAULT_TARGET_COLUMN,
 )
 
 OUTPUT_DIR = Path("artifacts")
@@ -26,8 +26,6 @@ TRAINING_SUMMARY_PATH = OUTPUT_DIR / "gauge_24h_production_training_summary.json
 PREDICTIONS_CSV = OUTPUT_DIR / "gauge_24h_production_predictions.csv"
 PREDICTIONS_SUMMARY_JSON = OUTPUT_DIR / "gauge_24h_production_predictions_summary.json"
 PREDICTIONS_TABLE = "gauge_24h_production_predictions"
-
-PREDICTION_HORIZON_HOURS = 24
 
 
 def make_run_id(model_version: str) -> str:
@@ -54,8 +52,9 @@ def load_model():
     return joblib.load(MODEL_PATH)
 
 
-def prepare_inference_frame() -> pd.DataFrame:
-    columns = list(dict.fromkeys(PRODUCTION_FEATURE_COLUMNS + [TARGET_COLUMN, "timestamp_utc"]))
+def prepare_inference_frame(horizon_hours: int) -> tuple[pd.DataFrame, str]:
+    target_column = f"target_value_t_plus_{horizon_hours}h"
+    columns = list(dict.fromkeys(PRODUCTION_FEATURE_COLUMNS + [DEFAULT_TARGET_COLUMN, target_column, "target_value", "timestamp_utc"]))
     df = load_bigquery_table(
         TABLE_NAME,
         columns=columns,
@@ -69,10 +68,12 @@ def prepare_inference_frame() -> pd.DataFrame:
     df = df.dropna(subset=["timestamp_utc"]).copy()
 
     for col in CATEGORICAL_COLUMNS:
-        df[col] = df[col].astype("string")
+        if col in df.columns:
+            df[col] = df[col].astype("string")
 
-    for col in NUMERIC_COLUMNS_LEAN + [TARGET_COLUMN]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+    for col in list(dict.fromkeys(NUMERIC_COLUMNS_LEAN + [DEFAULT_TARGET_COLUMN, target_column, "target_value"])):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
     latest_rows = (
         df.groupby("station_name", dropna=False)["timestamp_utc"]
@@ -90,15 +91,13 @@ def prepare_inference_frame() -> pd.DataFrame:
     latest_df = latest_df[latest_df["timestamp_utc"] == latest_df["latest_timestamp_utc"]].copy()
     latest_df = latest_df.sort_values(["station_name", "timestamp_utc"]).reset_index(drop=True)
 
-    latest_df["forecast_timestamp_utc"] = latest_df["timestamp_utc"] + pd.to_timedelta(
-        PREDICTION_HORIZON_HOURS, unit="h"
-    )
+    latest_df["forecast_timestamp_utc"] = latest_df["timestamp_utc"] + pd.to_timedelta(horizon_hours, unit="h")
     latest_df["prediction_ready_utc"] = pd.Timestamp.now(tz="UTC")
-    return latest_df
+    return latest_df, target_column
 
 
 def validate_inference_frame(df: pd.DataFrame) -> None:
-    missing = [c for c in PRODUCTION_FEATURE_COLUMNS + ["timestamp_utc"] if c not in df.columns]
+    missing = [c for c in PRODUCTION_FEATURE_COLUMNS + ["timestamp_utc", "target_value"] if c not in df.columns]
     if missing:
         raise ValueError(f"Missing required inference columns: {missing}")
 
@@ -114,19 +113,28 @@ def validate_inference_frame(df: pd.DataFrame) -> None:
         raise ValueError(f"Expected one latest row per station, found duplicates:\n{dupes.head(20)}")
 
 
-def score_frame(df: pd.DataFrame, model, model_version: str) -> pd.DataFrame:
+def score_frame(df: pd.DataFrame, model, model_version: str, target_mode: str, horizon_hours: int, target_column: str) -> pd.DataFrame:
     result = df.copy()
     X = result[PRODUCTION_FEATURE_COLUMNS].copy()
 
-    result["prediction"] = model.predict(X)
+    pred_raw = model.predict(X)
+    if target_mode == "delta":
+        y_now = pd.to_numeric(result["target_value"], errors="coerce").to_numpy()
+        result["prediction"] = pred_raw + y_now
+    elif target_mode == "level":
+        result["prediction"] = pred_raw
+    else:
+        raise ValueError(f"Unsupported target_mode={target_mode!r}")
+
     result["model_version"] = model_version
     result["run_id"] = make_run_id(model_version)
-    result["target_column"] = TARGET_COLUMN
-    result["prediction_horizon_hours"] = PREDICTION_HORIZON_HOURS
+    result["target_column"] = target_column
+    result["target_mode"] = target_mode
+    result["prediction_horizon_hours"] = horizon_hours
 
-    if TARGET_COLUMN in result.columns:
-        result["actual_if_available"] = result[TARGET_COLUMN]
-        result["actual_available_now"] = result[TARGET_COLUMN].notna()
+    if target_column in result.columns:
+        result["actual_if_available"] = result[target_column]
+        result["actual_available_now"] = result[target_column].notna()
     else:
         result["actual_if_available"] = pd.NA
         result["actual_available_now"] = False
@@ -142,6 +150,7 @@ def score_frame(df: pd.DataFrame, model, model_version: str) -> pd.DataFrame:
         "forecast_timestamp_utc",
         "prediction_ready_utc",
         "prediction_horizon_hours",
+        "target_mode",
         "prediction",
         "actual_if_available",
         "actual_available_now",
@@ -159,6 +168,9 @@ def build_summary(pred_df: pd.DataFrame, training_summary: dict) -> dict:
         "predicted_at_utc": datetime.now(timezone.utc).isoformat(),
         "run_id": pred_df["run_id"].iloc[0] if len(pred_df) else None,
         "model_version": pred_df["model_version"].iloc[0] if len(pred_df) else None,
+        "target_column": training_summary.get("target_column"),
+        "target_mode": training_summary.get("target_mode"),
+        "horizon_hours": training_summary.get("horizon_hours"),
         "training_rows": training_summary.get("rows_trained"),
         "training_train_end_utc": training_summary.get("train_end_utc"),
         "rows_predicted": int(len(pred_df)),
@@ -173,12 +185,21 @@ def build_summary(pred_df: pd.DataFrame, training_summary: dict) -> dict:
 def main():
     training_summary = load_training_summary()
     model_version = training_summary["model_version"]
+    target_mode = training_summary.get("target_mode", "level")
+    horizon_hours = int(training_summary.get("horizon_hours", 24))
 
     model = load_model()
-    inference_df = prepare_inference_frame()
+    inference_df, target_column = prepare_inference_frame(horizon_hours)
     validate_inference_frame(inference_df)
 
-    pred_df = score_frame(inference_df, model=model, model_version=model_version)
+    pred_df = score_frame(
+        inference_df,
+        model=model,
+        model_version=model_version,
+        target_mode=target_mode,
+        horizon_hours=horizon_hours,
+        target_column=target_column,
+    )
 
     pred_df.to_csv(PREDICTIONS_CSV, index=False)
     write_bigquery_table(pred_df, PREDICTIONS_TABLE, dataset="rhein_curated", if_exists="replace")

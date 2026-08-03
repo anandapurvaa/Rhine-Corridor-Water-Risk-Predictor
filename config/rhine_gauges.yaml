@@ -1,64 +1,77 @@
-rhine_priority_gauges:
-  - ANDERNACH
+rhine_decision_gauges:
+  - KAUB
+  - DUISBURG-RUHRORT
+  - EMMERICH
+
+rhine_support_gauges:
+  - BASEL-RHEINHALLE
+  - MAXAU
+  - MANNHEIM
+  - MAINZ
+  - OESTRICH
+  - KOBLENZ
+  - KÖLN
+  - WESEL
+  - LOBITH
+
+rhine_optional_gauges:
   - BINGEN
   - BONN
-  - BOPPARD
-  - BRAUBACH
-  - BREISACH
-  - BASEL-RHEINHALLE
-  - BODENHEIM
-  - DUISBURG-RUHRORT
-  - DÜSSELDORF
-  - EMMERICH
-  - IFFEZHEIM
-  - KAUB
-  - KEHL-KRONENHOF
-  - KOBLENZ
-  - KONSTANZ-RHEIN
-  - KÖLN
-  - LOBITH
-  - MAINZ
-  - MANNHEIM
-  - MAXAU
-  - NIERSTEIN-OPPENHEIM
-  - NEUWIED STADT
-  - OBERWINTER
-  - OESTRICH
-  - OTTENHEIM
-  - PANNERDENSE KOP
-  - PHILIPPSBURG
-  - PLITTERSDORF
-  - REES
-  - RHEINWEILER
-  - RUST
-  - SANKT GOAR
   - SPEYER
-  - WESEL
   - WORMS
+  - IFFEZHEIM
+  - REES
+  - BREISACH
+
+rhine_priority_gauges:
+  - KAUB
+  - DUISBURG-RUHRORT
+  - EMMERICH
+  - BASEL-RHEINHALLE
+  - MAXAU
+  - MANNHEIM
+  - MAINZ
+  - OESTRICH
+  - KOBLENZ
+  - KÖLN
+  - WESEL
+  - LOBITH
+  - BINGEN
+  - BONN
+  - SPEYER
+  - WORMS
+  - IFFEZHEIM
+  - REES
+  - BREISACH
 
 rhine_name_keywords:
-  - RHEIN
   - KAUB
-  - KOBLENZ
-  - KÖLN
   - DUISBURG
   - EMMERICH
-  - MAXAU
+  - KÖLN
+  - COLOGNE
+  - KOBLENZ
   - MAINZ
-  - BINGEN
-  - BONN
-  - WORMS
-  - SPEYER
+  - OESTRICH
+  - MAXAU
+  - MANNHEIM
   - WESEL
-  - REES
   - LOBITH
+  - BASEL
+  - SPEYER
+  - WORMS
+  - BINGEN
+  - BREISACH
+  - RUST
+  - OTTENHEIM
+  - KEHL
+  - IFFEZHEIM
+  - PLITTERSDORF
+  - PHILIPPSBURG
 
 historical_missing_stations:
   - LOBITH
-  - KONSTANZ-RHEIN
   - BASEL-RHEINHALLE
-  - NEUWIED STADT
-  - PANNERDENSE KOP
 
 historical_csv_root: data/raw/pegelonline_historical
 historical_backfill_start: "2018-01-01"

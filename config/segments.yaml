@@ -1,33 +1,36 @@
 segments:
   upper_rhine:
     label: "Upper Rhine"
-    stations:
+    decision_gauge: "KAUB"
+    support_gauges:
       - BASEL-RHEINHALLE
-      - RHEINWEILER
       - BREISACH
       - IFFEZHEIM
       - MAXAU
 
   middle_rhine:
     label: "Middle Rhine"
-    stations:
-      - SPEYER
+    decision_gauge: "KAUB"
+    support_gauges:
       - MANNHEIM
       - WORMS
       - MAINZ
+      - OESTRICH
       - BINGEN
-      - KAUB
-      - SANKT GOAR
       - KOBLENZ
 
   lower_rhine:
     label: "Lower Rhine"
-    stations:
-      - BONN
+    decision_gauge: "DUISBURG-RUHRORT"
+    support_gauges:
       - KÖLN
-      - DÜSSELDORF
-      - DUISBURG-RUHRORT
       - WESEL
       - REES
       - EMMERICH
+      - LOBITH
+
+  delta_gateway:
+    label: "Dutch Border / Gateway"
+    decision_gauge: "EMMERICH"
+    support_gauges:
       - LOBITH

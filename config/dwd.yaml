@@ -5,21 +5,174 @@ variables:
     folder: "air_temperature"
     historical_subdir: "historical"
     recent_subdir: "recent"
+    station_description_file: "TU_Stundenwerte_Beschreibung_Stationen.txt"
 
   precipitation:
     folder: "precipitation"
     historical_subdir: "historical"
     recent_subdir: "recent"
+    station_description_file: "RR_Stundenwerte_Beschreibung_Stationen.txt"
 
   pressure:
     folder: "pressure"
     historical_subdir: "historical"
     recent_subdir: "recent"
+    station_description_file: "P0_Stundenwerte_Beschreibung_Stationen.txt"
 
   wind:
     folder: "wind"
     historical_subdir: "historical"
     recent_subdir: "recent"
+    station_description_file: "FF_Stundenwerte_Beschreibung_Stationen.txt"
 
 raw_output_dir: "data/raw/dwd_hourly"
 timezone_name: "UTC"
+historical_start_date: "2018-01-01"
+incremental_table_name: "dwd_hourly_observations"
+incremental_lookback_hours: 48
+default_run_mode: "recent"
+
+min_variable_families: 4
+min_feature_overlap_ratio: 0.80
+min_fully_populated_rows: 5000
+
+target_station_ids:
+  # Core Rhine corridor anchors
+  - "02712"   # Konstanz
+  - "05906"   # Mannheim
+  - "03137"   # Mainz
+  - "02667"   # Köln/Bonn
+  - "01078"   # Düsseldorf
+  - "00161"   # Andernach
+  - "01420"   # Frankfurt/Main
+  - "02522"   # Karlsruhe
+
+  # Regional support / proxy-capable inland stations
+  - "15000"   # Aachen-Orsbach
+  - "01303"   # Essen-Bredeney
+  - "00003"   # Aachen
+  - "00150"   # Alzey
+  - "00216"   # Attendorn-Neulisternohl
+
+  # Corridor support
+  - "10513"   # Koeln/Bonn
+  - "10520"   # Andernach
+  - "10505"   # Aachen
+  - "10506"   # Aachen-Orsbach
+  - "10515"   # Bendorf
+  - "10519"   # Königswinter-Heiderhof
+  - "08827"   # Bonn-Endenich
+  - "08844"   # Bonn-Rodderberg
+
+target_station_names:
+  - "KONSTANZ"
+  - "MANNHEIM"
+  - "MAINZ"
+  - "KÖLN/BONN"
+  - "KOELN/BONN"
+  - "KÖLN"
+  - "KOELN"
+  - "DÜSSELDORF"
+  - "DUESSELDORF"
+  - "ANDERNACH"
+  - "FRANKFURT/MAIN"
+  - "FRANKFURT"
+  - "KARLSRUHE"
+  - "AACHEN-ORSBACH"
+  - "AACHEN"
+  - "ESSEN"
+  - "ALZEY"
+  - "ATTENDORN"
+  - "BENDORF"
+  - "KÖNIGSWINTER"
+  - "KOENIGSWINTER"
+  - "BONN"
+  - "FREIBURG"
+  - "BREISACH"
+  - "KEHL"
+  - "OFFENBURG"
+  - "RUST"
+  - "OTTENHEIM"
+  - "RHEINWEILER"
+  - "IFFEZHEIM"
+  - "PLITTERSDORF"
+  - "PHILIPPSBURG"
+  - "SPEYER"
+  - "WORMS"
+  - "BINGEN"
+  - "OESTRICH"
+  - "KAUB"
+  - "KOBLENZ"
+  - "BOPPARD"
+  - "SANKT GOAR"
+  - "OBERWINTER"
+  - "BONN"
+  - "WESEL"
+  - "REES"
+  - "EMMERICH"
+  - "DUISBURG"
+  - "DUISBURG-RUHRORT"
+  - "LOBITH"
+  - "BASEL"
+  - "BASEL-RHEINHALLE"
+  - "NIEDERKASSEL"
+  - "BAD HONNEF"
+  - "KÖNIGSWINTER-HEIDERHOF"
+  - "BONN-ENDE­NICH"
+  - "BONN-RODDERBERG"
+
+primary_station_ids:
+  - "02712"
+  - "05906"
+  - "03137"
+  - "02667"
+  - "01078"
+  - "00161"
+  - "01420"
+  - "02522"
+
+proxy_station_ids:
+  # West / Ruhr / Lower Rhine support
+  - "15000"
+  - "01303"
+  - "00003"
+  - "10505"
+  - "10506"
+  - "10513"
+  - "10515"
+  - "10519"
+  - "08827"
+  - "08844"
+  - "00216"
+
+  # Middle Rhine / Central Rhine support
+  - "00150"
+  - "10520"
+  - "05906"
+  - "03137"
+  - "02667"
+  - "01078"
+  - "00161"
+  - "01420"
+  - "02522"
+
+  # Upper Rhine / southern support
+  - "BREISACH"
+  - "RUST"
+  - "OTTENHEIM"
+  - "KEHL-KRONENHOF"
+  - "RHEINWEILER"
+  - "IFFEZHEIM"
+  - "PLITTERSDORF"
+  - "PHILIPPSBURG"
+  - "SPEYER"
+  - "WORMS"
+  - "MAXAU"
+  - "MANNHEIM"
+  - "BASEL"
+  - "BASEL-RHEINHALLE"
+
+bounding_box: {}
+
+max_station_count: 32
+proxy_station_max_distance_km: 250.0

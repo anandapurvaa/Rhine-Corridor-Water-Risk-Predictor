@@ -1,7 +1,7 @@
 {
-  "last_successful_ingestion_ts_utc": "2026-08-01T13:40:30.044652+00:00",
-  "max_observed_measurement_ts_utc": "2026-08-01T13:30:00Z",
-  "rows_written": 70,
+  "last_successful_ingestion_ts_utc": "2026-08-03T05:08:07.772837+00:00",
+  "max_observed_measurement_ts_utc": "2026-08-03T05:00:00Z",
+  "rows_written": 3413,
   "mode": "incremental",
-  "api_start": "2026-08-01T13:15:00Z"
+  "api_start": "2026-08-01T13:30:00Z"
 }

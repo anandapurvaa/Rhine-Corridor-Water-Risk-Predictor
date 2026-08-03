@@ -1,26 +1,83 @@
-target_station_ids: []
+target_station_ids:
+  # Primary corridor stations
+  - "02712"   # Konstanz
+  - "05906"   # Mannheim
+  - "03137"   # Mainz
+  - "02667"   # Köln/Bonn
+  - "01078"   # Düsseldorf
+  - "00161"   # Andernach
+  - "01420"   # Frankfurt/Main
+  - "02522"   # Karlsruhe
+
+  # Primary proxy-capable inland/support stations already in use
+  - "15000"   # Aachen-Orsbach
+  - "01303"   # Essen-Bredeney / Ruhr-area support
+
+  # Additional proxy candidates from RR_Stundenwerte_Beschreibung_Stationen.txt
+  - "00003"   # Aachen
+  - "00150"   # Alzey
+  - "00216"   # Attendorn-Neulisternohl
+
+  # Additional corridor-support stations for multisource DWD coverage
+  - "10513"   # Koeln/Bonn
+  - "10520"   # Andernach
+  - "10505"   # Aachen
+  - "10506"   # Aachen-Orsbach
+  - "10515"   # Bendorf
+  - "10519"   # Königwinter-Heiderhof
+  - "08827"   # Bonn-Endenich
+  - "08844"   # Bonn-Rodderberg
 
 target_station_names:
-  - "BASEL"
-  - "RHEINFELDEN"
-  - "FREIBURG"
-  - "KARLSRUHE"
-  - "RHEINSTETTEN"
+  - "KONSTANZ"
   - "MANNHEIM"
   - "MAINZ"
-  - "KOBLENZ"
-  - "BONN"
+  - "KÖLN/BONN"
+  - "KOELN/BONN"
   - "KÖLN"
   - "KOELN"
   - "DÜSSELDORF"
   - "DUESSELDORF"
-  - "WESEL"
-  - "EMMERICH"
+  - "ANDERNACH"
+  - "FRANKFURT/MAIN"
+  - "FRANKFURT"
+  - "KARLSRUHE"
+  - "AACHEN-ORSBACH"
+  - "AACHEN"
+  - "ESSEN"
+  - "ALZEY"
+  - "ATTENDORN"
+  - "BENDORF"
+  - "KÖNIGSWINTER"
+  - "KOENIGSWINTER"
+  - "BONN"
 
-bounding_box:
-  min_lat: 47.4
-  max_lat: 51.9
-  min_lon: 7.0
-  max_lon: 8.7
+primary_station_ids:
+  - "02712"
+  - "05906"
+  - "03137"
+  - "02667"
+  - "01078"
+  - "00161"
+  - "01420"
+  - "02522"
 
-max_station_count: 25
+proxy_station_ids:
+  - "15000"
+  - "01303"
+  - "00003"
+  - "00150"
+  - "00216"
+  - "10513"
+  - "10520"
+  - "10505"
+  - "10506"
+  - "10515"
+  - "10519"
+  - "08827"
+  - "08844"
+
+bounding_box: {}
+
+max_station_count: 24
+proxy_station_max_distance_km: 175.0
