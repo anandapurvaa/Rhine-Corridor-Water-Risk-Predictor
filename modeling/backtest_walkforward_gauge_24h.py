@@ -24,7 +24,8 @@ from modeling.schemas import (
     NUMERIC_COLUMNS_LEAN,
     OPTIONAL_METADATA_COLUMNS,
     PRODUCTION_FEATURE_COLUMNS,
-    TABLE_NAME,
+    ROBUSTNESS_REQUIRED_COLUMNS,
+    BACKTEST_TABLE_NAME,
     TARGET_COLUMN as DEFAULT_TARGET_COLUMN,
 )
 
@@ -38,32 +39,25 @@ MAX_BACKTEST_MONTHS = int(os.getenv("GAUGE24H_MAX_BACKTEST_MONTHS", "18"))
 MAX_STATIONS = int(os.getenv("GAUGE24H_MAX_STATIONS", "0"))
 TARGET_MODE = os.getenv("GAUGE24H_TARGET_MODE", "level").strip().lower()
 FEATURE_SET = os.getenv("GAUGE24H_FEATURE_SET", "default").strip().lower()
+MAX_FEATURE_NULL_FRACTION = float(os.getenv("GAUGE24H_MAX_FEATURE_NULL_FRACTION", "0.35"))
 
 BASELINE_FALLBACK_COLUMNS = ["target_value", "lag_1", "lag_3", "lag_6", "rolling_mean_3"]
 
-
-def resolve_feature_columns() -> list[str]:
-    base = list(dict.fromkeys(PRODUCTION_FEATURE_COLUMNS))
+def resolve_feature_columns(available_columns: list[str]) -> list[str]:
+    base = [c for c in PRODUCTION_FEATURE_COLUMNS if c in available_columns]
     if FEATURE_SET == "default":
         return base
     if FEATURE_SET == "simple":
-        preferred = [
-            c for c in ["target_value", "lag_1", "lag_3", "lag_6", "rolling_mean_3", "station_name"]
-            if c in base
-        ]
+        preferred = [c for c in ["target_value", "lag_1", "lag_3", "lag_6", "rolling_mean_3", "station_name"] if c in base]
         if preferred:
             return preferred
         fallback = [c for c in base if c in BASELINE_FALLBACK_COLUMNS]
         return fallback or base
     raise ValueError(f"Unsupported GAUGE24H_FEATURE_SET={FEATURE_SET!r}")
 
-
-FEATURE_COLUMNS = resolve_feature_columns()
-
-
-def build_pipeline() -> Pipeline:
-    categorical_features = [c for c in CATEGORICAL_COLUMNS if c in FEATURE_COLUMNS]
-    numeric_features = [c for c in FEATURE_COLUMNS if c not in categorical_features]
+def build_pipeline(feature_columns: list[str]) -> Pipeline:
+    categorical_features = [c for c in CATEGORICAL_COLUMNS if c in feature_columns]
+    numeric_features = [c for c in feature_columns if c not in categorical_features]
 
     transformers = []
     if categorical_features:
@@ -103,9 +97,7 @@ def build_pipeline() -> Pipeline:
         l2_regularization=0.1,
         random_state=42,
     )
-
     return Pipeline(steps=[("preprocessor", preprocessor), ("model", model)])
-
 
 def infer_step_hours(df: pd.DataFrame) -> float:
     diffs = (
@@ -116,9 +108,7 @@ def infer_step_hours(df: pd.DataFrame) -> float:
     )
     if diffs.empty:
         raise ValueError("Cannot infer sampling frequency: no timestamp diffs found.")
-    median_step = diffs.median()
-    return median_step.total_seconds() / 3600.0
-
+    return diffs.median().total_seconds() / 3600.0
 
 def build_horizon_target_column(df: pd.DataFrame, horizon_hours: int) -> tuple[pd.DataFrame, str]:
     native_col = f"target_value_t_plus_{horizon_hours}h"
@@ -131,16 +121,13 @@ def build_horizon_target_column(df: pd.DataFrame, horizon_hours: int) -> tuple[p
 
     shift_steps = round(horizon_hours / step_hours)
     if shift_steps <= 0:
-        raise ValueError(
-            f"Horizon {horizon_hours}h is smaller than sampling step {step_hours}h; cannot build target."
-        )
+        raise ValueError(f"Horizon {horizon_hours}h is smaller than sampling step {step_hours}h")
 
     df = df.sort_values(["station_name", "timestamp_utc"]).copy()
     df[native_col] = df.groupby("station_name")["target_value"].shift(-shift_steps)
     return df, native_col
 
-
-def prepare_dataframe() -> tuple[pd.DataFrame, str]:
+def prepare_dataframe() -> tuple[pd.DataFrame, str, list[str]]:
     requested_columns = list(
         dict.fromkeys(
             PRODUCTION_FEATURE_COLUMNS
@@ -157,10 +144,15 @@ def prepare_dataframe() -> tuple[pd.DataFrame, str]:
         )
     )
     df = load_bigquery_table(
-        TABLE_NAME,
+        BACKTEST_TABLE_NAME,
         columns=requested_columns,
         order_by="timestamp_utc, station_name",
+        allow_missing_columns=True,
     )
+
+    missing_required = [c for c in ROBUSTNESS_REQUIRED_COLUMNS if c not in df.columns]
+    if missing_required:
+        raise ValueError(f"Missing required base columns: {missing_required}")
 
     df["timestamp_utc"] = pd.to_datetime(df["timestamp_utc"], utc=True, errors="coerce")
     df = df.dropna(subset=["timestamp_utc"]).copy()
@@ -181,7 +173,13 @@ def prepare_dataframe() -> tuple[pd.DataFrame, str]:
     df, target_column = build_horizon_target_column(df, HORIZON_HOURS)
     df[target_column] = pd.to_numeric(df[target_column], errors="coerce")
     df = df.dropna(subset=[target_column]).copy()
-    df = df.sort_values(["timestamp_utc", "station_name"]).reset_index(drop=True)
+
+    feature_columns = resolve_feature_columns(df.columns.tolist())
+    if not feature_columns:
+        raise ValueError("No usable feature columns found for backtest.")
+
+    row_null_fraction = df[feature_columns].isna().mean(axis=1)
+    df = df.loc[row_null_fraction <= MAX_FEATURE_NULL_FRACTION].copy()
 
     if MAX_BACKTEST_MONTHS > 0:
         cutoff = df["timestamp_utc"].max() - pd.DateOffset(months=MAX_BACKTEST_MONTHS)
@@ -197,8 +195,7 @@ def prepare_dataframe() -> tuple[pd.DataFrame, str]:
         )
         df = df[df["station_name"].isin(top_stations)].copy()
 
-    return df.sort_values(["timestamp_utc", "station_name"]).reset_index(drop=True), target_column
-
+    return df.sort_values(["timestamp_utc", "station_name"]).reset_index(drop=True), target_column, feature_columns
 
 def iter_walkforward_splits(df: pd.DataFrame):
     timestamps = pd.Series(sorted(pd.to_datetime(df["timestamp_utc"], utc=True).dropna().unique()))
@@ -207,7 +204,6 @@ def iter_walkforward_splits(df: pd.DataFrame):
 
     first_ts = pd.Timestamp(timestamps.min())
     last_ts = pd.Timestamp(timestamps.max())
-
     origin = first_ts + pd.Timedelta(days=MIN_TRAIN_DAYS)
     step_delta = pd.Timedelta(days=STEP_DAYS)
     horizon_delta = pd.Timedelta(hours=HORIZON_HOURS)
@@ -224,7 +220,6 @@ def iter_walkforward_splits(df: pd.DataFrame):
 
         origin = origin + step_delta
 
-
 def build_targets(frame: pd.DataFrame, target_column: str) -> pd.Series:
     y_level = pd.to_numeric(frame[target_column], errors="coerce")
     if TARGET_MODE == "delta":
@@ -234,14 +229,12 @@ def build_targets(frame: pd.DataFrame, target_column: str) -> pd.Series:
         return y_level
     raise ValueError(f"Unsupported GAUGE24H_TARGET_MODE={TARGET_MODE!r}")
 
-
 def reconstruct_predictions(frame: pd.DataFrame, pred_raw: np.ndarray, target_column: str) -> tuple[pd.Series, np.ndarray]:
     y_true_eval = pd.to_numeric(frame[target_column], errors="coerce")
     if TARGET_MODE == "delta":
         y_now = pd.to_numeric(frame["target_value"], errors="coerce").to_numpy()
         return y_true_eval, pred_raw + y_now
     return y_true_eval, pred_raw
-
 
 def add_event_metrics(frame: pd.DataFrame, threshold_by_station: dict[str, float], target_column: str, pred_col: str) -> dict:
     df = frame.copy()
@@ -268,7 +261,6 @@ def add_event_metrics(frame: pd.DataFrame, threshold_by_station: dict[str, float
         "event_f1": f1,
     }
 
-
 def main():
     threshold_by_station = {
         "KAUB": 120,
@@ -285,17 +277,17 @@ def main():
         "REES": 160,
     }
 
-    df, target_column = prepare_dataframe()
+    df, target_column, feature_columns = prepare_dataframe()
 
     fold_rows = []
     pred_rows = []
 
     for fold_num, (origin, train_df, test_df) in enumerate(iter_walkforward_splits(df), start=1):
-        X_train = train_df[FEATURE_COLUMNS].copy()
+        X_train = train_df[feature_columns].copy()
         y_train = build_targets(train_df, target_column)
-        X_test = test_df[FEATURE_COLUMNS].copy()
+        X_test = test_df[feature_columns].copy()
 
-        model = build_pipeline()
+        model = build_pipeline(feature_columns)
         model.fit(X_train, y_train)
 
         pred_raw = model.predict(X_test)
@@ -331,8 +323,9 @@ def main():
                 "target_column": target_column,
                 "target_mode": TARGET_MODE,
                 "feature_set": FEATURE_SET,
+                "feature_count": int(len(feature_columns)),
+                "feature_columns_used": ",".join(feature_columns),
                 "horizon_hours": HORIZON_HOURS,
-                "feature_count": int(len(FEATURE_COLUMNS)),
                 "model_mae": model_metrics["mae"],
                 "model_rmse": model_metrics["rmse"],
                 "model_bias": model_metrics["bias"],
@@ -359,9 +352,11 @@ def main():
         "target_column": target_column,
         "target_mode": TARGET_MODE,
         "feature_set": FEATURE_SET,
-        "feature_count": int(len(FEATURE_COLUMNS)),
+        "feature_count": int(len(feature_columns)),
+        "feature_columns_used": feature_columns,
         "max_backtest_months": MAX_BACKTEST_MONTHS,
         "max_stations": MAX_STATIONS,
+        "max_feature_null_fraction": MAX_FEATURE_NULL_FRACTION,
         "mean_model_mae": float(folds_df["model_mae"].mean()),
         "mean_model_rmse": float(folds_df["model_rmse"].mean()),
         "mean_persist_rmse": float(folds_df["persist_rmse"].mean()),
@@ -379,12 +374,11 @@ def main():
     with open(OUTPUT_DIR / "gauge_24h_walkforward_summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
 
-    final_model = build_pipeline()
-    final_model.fit(df[FEATURE_COLUMNS], build_targets(df, target_column))
+    final_model = build_pipeline(feature_columns)
+    final_model.fit(df[feature_columns], build_targets(df, target_column))
     joblib.dump(final_model, OUTPUT_DIR / "gauge_24h_walkforward_last_model.joblib")
 
     print(json.dumps(summary, indent=2))
-
 
 if __name__ == "__main__":
     main()

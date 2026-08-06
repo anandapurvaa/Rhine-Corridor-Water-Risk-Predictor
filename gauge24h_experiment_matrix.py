@@ -13,101 +13,11 @@ ROOT = Path(__file__).resolve().parent
 
 BASE_ENV = {
     "GAUGE24H_STEP_DAYS": "30",
-    "GAUGE24H_MAX_BACKTEST_MONTHS": "18",
+    "GAUGE24H_MAX_BACKTEST_MONTHS": "0",
 }
 
 
 EXPERIMENTS = [
-    {
-        "name": "global_default_24h",
-        "module": "modeling.backtest_walkforward_gauge_24h",
-        "env": {
-            **BASE_ENV,
-            "GAUGE24H_HORIZON_HOURS": "24",
-            "GAUGE24H_TARGET_MODE": "level",
-            "GAUGE24H_FEATURE_SET": "default",
-        },
-    },
-    {
-        "name": "cluster_default_24h",
-        "module": "modeling.backtest_walkforward_gauge_24h_cluster",
-        "env": {
-            **BASE_ENV,
-            "GAUGE24H_HORIZON_HOURS": "24",
-            "GAUGE24H_TARGET_MODE": "level",
-            "GAUGE24H_FEATURE_SET": "default",
-        },
-    },
-    {
-        "name": "global_delta_24h",
-        "module": "modeling.backtest_walkforward_gauge_24h",
-        "env": {
-            **BASE_ENV,
-            "GAUGE24H_HORIZON_HOURS": "24",
-            "GAUGE24H_TARGET_MODE": "delta",
-            "GAUGE24H_FEATURE_SET": "default",
-        },
-    },
-    {
-        "name": "cluster_delta_24h",
-        "module": "modeling.backtest_walkforward_gauge_24h_cluster",
-        "env": {
-            **BASE_ENV,
-            "GAUGE24H_HORIZON_HOURS": "24",
-            "GAUGE24H_TARGET_MODE": "delta",
-            "GAUGE24H_FEATURE_SET": "default",
-        },
-    },
-    {
-        "name": "global_simple_features_24h",
-        "module": "modeling.backtest_walkforward_gauge_24h",
-        "env": {
-            **BASE_ENV,
-            "GAUGE24H_HORIZON_HOURS": "24",
-            "GAUGE24H_TARGET_MODE": "level",
-            "GAUGE24H_FEATURE_SET": "simple",
-        },
-    },
-    {
-        "name": "cluster_simple_features_24h",
-        "module": "modeling.backtest_walkforward_gauge_24h_cluster",
-        "env": {
-            **BASE_ENV,
-            "GAUGE24H_HORIZON_HOURS": "24",
-            "GAUGE24H_TARGET_MODE": "level",
-            "GAUGE24H_FEATURE_SET": "simple",
-        },
-    },
-    {
-        "name": "global_delta_simple_24h",
-        "module": "modeling.backtest_walkforward_gauge_24h",
-        "env": {
-            **BASE_ENV,
-            "GAUGE24H_HORIZON_HOURS": "24",
-            "GAUGE24H_TARGET_MODE": "delta",
-            "GAUGE24H_FEATURE_SET": "simple",
-        },
-    },
-    {
-        "name": "cluster_delta_simple_24h",
-        "module": "modeling.backtest_walkforward_gauge_24h_cluster",
-        "env": {
-            **BASE_ENV,
-            "GAUGE24H_HORIZON_HOURS": "24",
-            "GAUGE24H_TARGET_MODE": "delta",
-            "GAUGE24H_FEATURE_SET": "simple",
-        },
-    },
-    {
-        "name": "global_default_48h",
-        "module": "modeling.backtest_walkforward_gauge_24h",
-        "env": {
-            **BASE_ENV,
-            "GAUGE24H_HORIZON_HOURS": "48",
-            "GAUGE24H_TARGET_MODE": "level",
-            "GAUGE24H_FEATURE_SET": "default",
-        },
-    },
     {
         "name": "cluster_default_48h",
         "module": "modeling.backtest_walkforward_gauge_24h_cluster",

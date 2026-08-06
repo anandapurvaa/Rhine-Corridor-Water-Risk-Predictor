@@ -1,7 +1,23 @@
 from __future__ import annotations
 
-TABLE_NAME = "supervised_gauge_24h_multisource"
-TARGET_COLUMN = "target_value_t_plus_24h"
+import os
+
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "rhine-corridor-navigator")
+BQ_DATASET_CURATED = os.getenv("BQ_DATASET_CURATED", "rhein_curated")
+
+GAUGE24H_BACKTEST_TABLE = os.getenv("GAUGE24H_BACKTEST_TABLE", "supervised_gauge_24h_multisource")
+GAUGE24H_TRAIN_TABLE = os.getenv("GAUGE24H_TRAIN_TABLE", "dataset_splits_gauge_24h")
+TARGET_COLUMN = os.getenv("GAUGE24H_TARGET_COLUMN", "target_value_t_plus_24h")
+
+GAUGE24H_TRAIN_SPLITS = [
+    s.strip() for s in os.getenv("GAUGE24H_TRAIN_SPLITS", "train,validation").split(",") if s.strip()
+]
+
+def curated_table(table_name: str) -> str:
+    return f"{GCP_PROJECT_ID}.{BQ_DATASET_CURATED}.{table_name}"
+
+BACKTEST_TABLE_NAME = curated_table(GAUGE24H_BACKTEST_TABLE)
+TRAIN_TABLE_NAME = curated_table(GAUGE24H_TRAIN_TABLE)
 
 CATEGORICAL_COLUMNS = [
     "station_name",
@@ -59,6 +75,8 @@ NUMERIC_COLUMNS_LEAN = [
     "pressure_delta_3",
     "temp_change_1_3",
     "precip_accel_12_24",
+    "diff_1",
+    "diff_3",
 ]
 
 PRODUCTION_FEATURE_COLUMNS = CATEGORICAL_COLUMNS + NUMERIC_COLUMNS_LEAN
@@ -67,4 +85,16 @@ OPTIONAL_METADATA_COLUMNS = [
     "station_id",
     "latitude",
     "longitude",
+    "split_name",
+    "gap_reason",
+    "train_end_utc",
+    "validation_start_utc",
+    "validation_end_utc",
+    "test_start_utc",
+]
+
+ROBUSTNESS_REQUIRED_COLUMNS = [
+    "station_name",
+    "timestamp_utc",
+    "target_value",
 ]

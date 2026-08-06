@@ -19,7 +19,8 @@ from modeling.schemas import (
     CATEGORICAL_COLUMNS,
     NUMERIC_COLUMNS_LEAN,
     PRODUCTION_FEATURE_COLUMNS,
-    TABLE_NAME,
+    ROBUSTNESS_REQUIRED_COLUMNS,
+    TRAIN_TABLE_NAME,
     TARGET_COLUMN as DEFAULT_TARGET_COLUMN,
 )
 
@@ -33,54 +34,8 @@ MIN_REQUIRED_ROWS = 1000
 MIN_REQUIRED_STATIONS = 5
 HORIZON_HOURS = int(os.getenv("GAUGE24H_HORIZON_HOURS", "24"))
 TARGET_MODE = os.getenv("GAUGE24H_TARGET_MODE", "level").strip().lower()
-
-
-def build_pipeline() -> Pipeline:
-    categorical_features = [c for c in CATEGORICAL_COLUMNS if c in PRODUCTION_FEATURE_COLUMNS]
-    numeric_features = [c for c in PRODUCTION_FEATURE_COLUMNS if c not in categorical_features]
-
-    preprocessor = ColumnTransformer(
-        transformers=[
-            (
-                "cat",
-                Pipeline(
-                    steps=[
-                        ("imputer", SimpleImputer(strategy="most_frequent")),
-                        ("onehot", OneHotEncoder(handle_unknown="ignore")),
-                    ]
-                ),
-                categorical_features,
-            ),
-            (
-                "num",
-                Pipeline(
-                    steps=[
-                        ("imputer", SimpleImputer(strategy="median")),
-                    ]
-                ),
-                numeric_features,
-            ),
-        ],
-        remainder="drop",
-        sparse_threshold=0,
-    )
-
-    model = HistGradientBoostingRegressor(
-        loss="squared_error",
-        learning_rate=0.05,
-        max_iter=300,
-        max_depth=6,
-        min_samples_leaf=20,
-        l2_regularization=0.1,
-        random_state=42,
-    )
-
-    return Pipeline(
-        steps=[
-            ("preprocessor", preprocessor),
-            ("model", model),
-        ]
-    )
+MAX_FEATURE_NULL_FRACTION = float(os.getenv("GAUGE24H_MAX_FEATURE_NULL_FRACTION", "0.35"))
+TRAIN_SPLIT_NAME = os.getenv("GAUGE24H_TRAIN_SPLIT_NAME", "train").strip().lower()
 
 
 def infer_step_hours(df: pd.DataFrame) -> float:
@@ -92,8 +47,7 @@ def infer_step_hours(df: pd.DataFrame) -> float:
     )
     if diffs.empty:
         raise ValueError("Cannot infer sampling frequency: no timestamp diffs found.")
-    median_step = diffs.median()
-    return median_step.total_seconds() / 3600.0
+    return diffs.median().total_seconds() / 3600.0
 
 
 def build_horizon_target_column(df: pd.DataFrame, horizon_hours: int) -> tuple[pd.DataFrame, str]:
@@ -107,9 +61,7 @@ def build_horizon_target_column(df: pd.DataFrame, horizon_hours: int) -> tuple[p
 
     shift_steps = round(horizon_hours / step_hours)
     if shift_steps <= 0:
-        raise ValueError(
-            f"Horizon {horizon_hours}h is smaller than sampling step {step_hours}h; cannot build target."
-        )
+        raise ValueError(f"Horizon {horizon_hours}h is smaller than sampling step {step_hours}h")
 
     df = df.sort_values(["station_name", "timestamp_utc"]).copy()
     df[native_col] = df.groupby("station_name")["target_value"].shift(-shift_steps)
@@ -127,81 +79,155 @@ def build_training_target(df: pd.DataFrame, target_column: str) -> pd.Series:
 
 
 def stable_model_version(train_start: pd.Timestamp, train_end: pd.Timestamp, rows: int, target_column: str) -> str:
-    seed = f"{TABLE_NAME}|{target_column}|{TARGET_MODE}|{HORIZON_HOURS}|{train_start.isoformat()}|{train_end.isoformat()}|{rows}"
+    seed = (
+        f"{TRAIN_TABLE_NAME}|{target_column}|{TARGET_MODE}|{HORIZON_HOURS}|"
+        f"{train_start.isoformat()}|{train_end.isoformat()}|{rows}|{TRAIN_SPLIT_NAME}"
+    )
     suffix = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12]
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return f"gauge24h_prod__{stamp}__{suffix}"
 
 
-def load_training_frame() -> tuple[pd.DataFrame, str]:
-    columns = list(dict.fromkeys(PRODUCTION_FEATURE_COLUMNS + [DEFAULT_TARGET_COLUMN, "target_value", "timestamp_utc"]))
-    df = load_bigquery_table(
-        TABLE_NAME,
-        columns=columns,
-        order_by="timestamp_utc, station_name",
-    )
+def resolve_available_feature_columns(df: pd.DataFrame) -> list[str]:
+    return [c for c in PRODUCTION_FEATURE_COLUMNS if c in df.columns]
 
-    if "timestamp_utc" not in df.columns:
-        raise ValueError("Expected timestamp_utc in training table")
 
-    df["timestamp_utc"] = pd.to_datetime(df["timestamp_utc"], utc=True, errors="coerce")
-    df = df.dropna(subset=["timestamp_utc"]).copy()
-
+def cast_columns(df: pd.DataFrame) -> pd.DataFrame:
     for col in CATEGORICAL_COLUMNS:
         if col in df.columns:
             df[col] = df[col].astype("string")
 
-    for col in list(dict.fromkeys(NUMERIC_COLUMNS_LEAN + [DEFAULT_TARGET_COLUMN, "target_value"])):
+    numeric_candidates = list(dict.fromkeys(NUMERIC_COLUMNS_LEAN + [DEFAULT_TARGET_COLUMN, "target_value"]))
+    for col in numeric_candidates:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
 
+
+def filter_sparse_rows(df: pd.DataFrame, feature_columns: list[str]) -> pd.DataFrame:
+    usable_features = [c for c in feature_columns if c in df.columns]
+    if not usable_features:
+        raise ValueError("No usable feature columns found after schema resolution.")
+
+    null_fraction = df[usable_features].isna().mean(axis=1)
+    return df.loc[null_fraction <= MAX_FEATURE_NULL_FRACTION].copy()
+
+
+def build_pipeline(feature_columns: list[str]) -> Pipeline:
+    categorical_features = [c for c in CATEGORICAL_COLUMNS if c in feature_columns]
+    numeric_features = [c for c in feature_columns if c not in categorical_features]
+
+    transformers = []
+    if categorical_features:
+        transformers.append(
+            (
+                "cat",
+                Pipeline(
+                    steps=[
+                        ("imputer", SimpleImputer(strategy="most_frequent")),
+                        ("onehot", OneHotEncoder(handle_unknown="ignore")),
+                    ]
+                ),
+                categorical_features,
+            )
+        )
+    if numeric_features:
+        transformers.append(
+            (
+                "num",
+                Pipeline(
+                    steps=[
+                        ("imputer", SimpleImputer(strategy="median")),
+                    ]
+                ),
+                numeric_features,
+            )
+        )
+
+    preprocessor = ColumnTransformer(transformers=transformers, remainder="drop", sparse_threshold=0)
+
+    model = HistGradientBoostingRegressor(
+        loss="squared_error",
+        learning_rate=0.05,
+        max_iter=300,
+        max_depth=6,
+        min_samples_leaf=20,
+        l2_regularization=0.1,
+        random_state=42,
+    )
+
+    return Pipeline(steps=[("preprocessor", preprocessor), ("model", model)])
+
+
+def load_training_frame() -> tuple[pd.DataFrame, str, list[str]]:
+    requested = list(
+        dict.fromkeys(
+            PRODUCTION_FEATURE_COLUMNS
+            + [DEFAULT_TARGET_COLUMN, "target_value", "timestamp_utc", "split_name"]
+        )
+    )
+
+    df = load_bigquery_table(
+        TRAIN_TABLE_NAME,
+        columns=requested,
+        order_by="timestamp_utc, station_name",
+        allow_missing_columns=True,
+    )
+
+    missing_required = [c for c in ROBUSTNESS_REQUIRED_COLUMNS if c not in df.columns]
+    if missing_required:
+        raise ValueError(f"Missing required base columns: {missing_required}")
+
+    if "split_name" not in df.columns:
+        raise ValueError("Training table must include split_name column.")
+
+    df["split_name"] = df["split_name"].astype("string").str.lower()
+    df = df[df["split_name"] == TRAIN_SPLIT_NAME].copy()
+
+    df["timestamp_utc"] = pd.to_datetime(df["timestamp_utc"], utc=True, errors="coerce")
+    df = df.dropna(subset=["timestamp_utc"]).copy()
+    df = cast_columns(df)
     df = df.dropna(subset=["target_value"]).copy()
     df = df.sort_values(["timestamp_utc", "station_name"]).reset_index(drop=True)
 
     df, target_column = build_horizon_target_column(df, HORIZON_HOURS)
     df[target_column] = pd.to_numeric(df[target_column], errors="coerce")
     df = df.dropna(subset=[target_column]).copy()
+
+    feature_columns = resolve_available_feature_columns(df)
+    df = filter_sparse_rows(df, feature_columns)
     df = df.sort_values(["timestamp_utc", "station_name"]).reset_index(drop=True)
 
-    return df, target_column
+    return df, target_column, feature_columns
 
 
-def validate_training_frame(df: pd.DataFrame, target_column: str) -> None:
-    missing = [c for c in PRODUCTION_FEATURE_COLUMNS + [target_column, "timestamp_utc", "target_value"] if c not in df.columns]
+def validate_training_frame(df: pd.DataFrame, target_column: str, feature_columns: list[str]) -> None:
+    missing = [c for c in ["timestamp_utc", "target_value", target_column] if c not in df.columns]
     if missing:
-        raise ValueError(f"Missing required columns: {missing}")
-
+        raise ValueError(f"Missing required columns after preparation: {missing}")
+    if not feature_columns:
+        raise ValueError("No feature columns available for training.")
     if len(df) < MIN_REQUIRED_ROWS:
         raise ValueError(f"Training frame too small: {len(df)} rows < {MIN_REQUIRED_ROWS}")
-
-    station_count = int(df["station_name"].nunique())
-    if station_count < MIN_REQUIRED_STATIONS:
-        raise ValueError(f"Too few stations: {station_count} < {MIN_REQUIRED_STATIONS}")
-
+    if int(df["station_name"].nunique()) < MIN_REQUIRED_STATIONS:
+        raise ValueError(f"Too few stations: {int(df['station_name'].nunique())} < {MIN_REQUIRED_STATIONS}")
     if df[target_column].notna().sum() == 0:
         raise ValueError("No non-null target rows available")
 
-    if df["timestamp_utc"].isna().any():
-        raise ValueError("timestamp_utc contains nulls after parsing")
 
-
-def training_null_profile(df: pd.DataFrame, target_column: str) -> dict:
-    cols = list(dict.fromkeys(PRODUCTION_FEATURE_COLUMNS + [target_column, "target_value"]))
-    profile = {}
-    for col in cols:
-        if col in df.columns:
-            profile[col] = {"null_rate": float(df[col].isna().mean())}
-    return profile
+def training_null_profile(df: pd.DataFrame, feature_columns: list[str], target_column: str) -> dict:
+    cols = list(dict.fromkeys(feature_columns + [target_column, "target_value"]))
+    return {col: {"null_rate": float(df[col].isna().mean())} for col in cols if col in df.columns}
 
 
 def main():
-    df, target_column = load_training_frame()
-    validate_training_frame(df, target_column)
+    df, target_column, feature_columns = load_training_frame()
+    validate_training_frame(df, target_column, feature_columns)
 
-    X = df[PRODUCTION_FEATURE_COLUMNS].copy()
+    X = df[feature_columns].copy()
     y = build_training_target(df, target_column)
 
-    model = build_pipeline()
+    model = build_pipeline(feature_columns)
     model.fit(X, y)
 
     train_start = df["timestamp_utc"].min()
@@ -213,17 +239,20 @@ def main():
     summary = {
         "trained_at_utc": datetime.now(timezone.utc).isoformat(),
         "model_version": model_version,
-        "table_name": TABLE_NAME,
+        "table_name": TRAIN_TABLE_NAME,
+        "train_split_used": TRAIN_SPLIT_NAME,
         "target_column": target_column,
         "target_mode": TARGET_MODE,
         "horizon_hours": HORIZON_HOURS,
-        "feature_columns": PRODUCTION_FEATURE_COLUMNS,
+        "feature_columns_requested": PRODUCTION_FEATURE_COLUMNS,
+        "feature_columns_used": feature_columns,
         "rows_trained": int(len(df)),
         "stations_trained": int(df["station_name"].nunique()),
         "train_start_utc": train_start.isoformat(),
         "train_end_utc": train_end.isoformat(),
         "model_path": str(MODEL_PATH),
-        "null_profile": training_null_profile(df, target_column),
+        "max_feature_null_fraction": MAX_FEATURE_NULL_FRACTION,
+        "null_profile": training_null_profile(df, feature_columns, target_column),
     }
 
     with open(TRAINING_SUMMARY_PATH, "w", encoding="utf-8") as f:

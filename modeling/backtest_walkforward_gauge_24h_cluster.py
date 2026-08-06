@@ -19,7 +19,8 @@ from modeling.schemas import (
     NUMERIC_COLUMNS_LEAN,
     OPTIONAL_METADATA_COLUMNS,
     PRODUCTION_FEATURE_COLUMNS,
-    TABLE_NAME,
+    ROBUSTNESS_REQUIRED_COLUMNS,
+    BACKTEST_TABLE_NAME,
     TARGET_COLUMN as DEFAULT_TARGET_COLUMN,
 )
 
@@ -37,12 +38,12 @@ MIN_CLUSTER_TRAIN_ROWS = int(os.getenv("GAUGE24H_MIN_CLUSTER_TRAIN_ROWS", "500")
 MIN_CLUSTER_STATIONS = int(os.getenv("GAUGE24H_MIN_CLUSTER_STATIONS", "2"))
 TARGET_MODE = os.getenv("GAUGE24H_TARGET_MODE", "level").strip().lower()
 FEATURE_SET = os.getenv("GAUGE24H_FEATURE_SET", "default").strip().lower()
+MAX_FEATURE_NULL_FRACTION = float(os.getenv("GAUGE24H_MAX_FEATURE_NULL_FRACTION", "0.35"))
 
 BASELINE_FALLBACK_COLUMNS = ["target_value", "lag_1", "lag_3", "lag_6", "rolling_mean_3"]
 
-
-def resolve_feature_columns() -> list[str]:
-    base = list(dict.fromkeys(PRODUCTION_FEATURE_COLUMNS))
+def resolve_feature_columns(available_columns: list[str]) -> list[str]:
+    base = [c for c in PRODUCTION_FEATURE_COLUMNS if c in available_columns]
     if FEATURE_SET == "default":
         return base
     if FEATURE_SET == "simple":
@@ -56,13 +57,9 @@ def resolve_feature_columns() -> list[str]:
         return fallback or base
     raise ValueError(f"Unsupported GAUGE24H_FEATURE_SET={FEATURE_SET!r}")
 
-
-FEATURE_COLUMNS = resolve_feature_columns()
-
-
-def build_pipeline() -> Pipeline:
-    categorical_features = [c for c in CATEGORICAL_COLUMNS if c in FEATURE_COLUMNS]
-    numeric_features = [c for c in FEATURE_COLUMNS if c not in categorical_features]
+def build_pipeline(feature_columns: list[str]) -> Pipeline:
+    categorical_features = [c for c in CATEGORICAL_COLUMNS if c in feature_columns]
+    numeric_features = [c for c in feature_columns if c not in categorical_features]
 
     transformers = []
     if categorical_features:
@@ -109,7 +106,6 @@ def build_pipeline() -> Pipeline:
 
     return Pipeline(steps=[("preprocessor", preprocessor), ("model", model)])
 
-
 def infer_step_hours(df: pd.DataFrame) -> float:
     diffs = (
         df.sort_values(["station_name", "timestamp_utc"])
@@ -121,7 +117,6 @@ def infer_step_hours(df: pd.DataFrame) -> float:
         raise ValueError("Cannot infer sampling frequency: no timestamp diffs found.")
     median_step = diffs.median()
     return median_step.total_seconds() / 3600.0
-
 
 def build_horizon_target_column(df: pd.DataFrame, horizon_hours: int) -> tuple[pd.DataFrame, str]:
     native_col = f"target_value_t_plus_{horizon_hours}h"
@@ -142,7 +137,6 @@ def build_horizon_target_column(df: pd.DataFrame, horizon_hours: int) -> tuple[p
     df[native_col] = df.groupby("station_name")["target_value"].shift(-shift_steps)
     return df, native_col
 
-
 def load_cluster_plan() -> pd.DataFrame:
     if not CLUSTER_PLAN_PATH.exists():
         raise FileNotFoundError(f"Missing cluster plan: {CLUSTER_PLAN_PATH}")
@@ -160,8 +154,7 @@ def load_cluster_plan() -> pd.DataFrame:
     cluster_df = cluster_df.drop_duplicates(subset=["station_name"]).reset_index(drop=True)
     return cluster_df
 
-
-def prepare_dataframe() -> tuple[pd.DataFrame, str]:
+def prepare_dataframe() -> tuple[pd.DataFrame, str, list[str]]:
     requested_columns = list(
         dict.fromkeys(
             PRODUCTION_FEATURE_COLUMNS
@@ -178,10 +171,15 @@ def prepare_dataframe() -> tuple[pd.DataFrame, str]:
         )
     )
     df = load_bigquery_table(
-        TABLE_NAME,
+        BACKTEST_TABLE_NAME,
         columns=requested_columns,
         order_by="timestamp_utc, station_name",
+        allow_missing_columns=True,
     )
+
+    missing_required = [c for c in ROBUSTNESS_REQUIRED_COLUMNS if c not in df.columns]
+    if missing_required:
+        raise ValueError(f"Missing required base columns: {missing_required}")
 
     df["timestamp_utc"] = pd.to_datetime(df["timestamp_utc"], utc=True, errors="coerce")
     df = df.dropna(subset=["timestamp_utc"]).copy()
@@ -202,7 +200,13 @@ def prepare_dataframe() -> tuple[pd.DataFrame, str]:
     df, target_column = build_horizon_target_column(df, HORIZON_HOURS)
     df[target_column] = pd.to_numeric(df[target_column], errors="coerce")
     df = df.dropna(subset=[target_column]).copy()
-    df = df.sort_values(["timestamp_utc", "station_name"]).reset_index(drop=True)
+
+    feature_columns = resolve_feature_columns(df.columns.tolist())
+    if not feature_columns:
+        raise ValueError("No usable feature columns found for cluster backtest.")
+
+    row_null_fraction = df[feature_columns].isna().mean(axis=1)
+    df = df.loc[row_null_fraction <= MAX_FEATURE_NULL_FRACTION].copy()
 
     if MAX_BACKTEST_MONTHS > 0:
         cutoff = df["timestamp_utc"].max() - pd.DateOffset(months=MAX_BACKTEST_MONTHS)
@@ -218,8 +222,7 @@ def prepare_dataframe() -> tuple[pd.DataFrame, str]:
         )
         df = df[df["station_name"].isin(top_stations)].copy()
 
-    return df.sort_values(["timestamp_utc", "station_name"]).reset_index(drop=True), target_column
-
+    return df.sort_values(["timestamp_utc", "station_name"]).reset_index(drop=True), target_column, feature_columns
 
 def iter_walkforward_splits(df: pd.DataFrame):
     timestamps = pd.Series(sorted(pd.to_datetime(df["timestamp_utc"], utc=True).dropna().unique()))
@@ -245,7 +248,6 @@ def iter_walkforward_splits(df: pd.DataFrame):
 
         origin = origin + step_delta
 
-
 def build_targets(frame: pd.DataFrame, target_column: str) -> pd.Series:
     y_level = pd.to_numeric(frame[target_column], errors="coerce")
     if TARGET_MODE == "delta":
@@ -255,14 +257,12 @@ def build_targets(frame: pd.DataFrame, target_column: str) -> pd.Series:
         return y_level
     raise ValueError(f"Unsupported GAUGE24H_TARGET_MODE={TARGET_MODE!r}")
 
-
 def reconstruct_predictions(frame: pd.DataFrame, pred_raw: np.ndarray, target_column: str) -> tuple[pd.Series, np.ndarray]:
     y_true_eval = pd.to_numeric(frame[target_column], errors="coerce")
     if TARGET_MODE == "delta":
         y_now = pd.to_numeric(frame["target_value"], errors="coerce").to_numpy()
         return y_true_eval, pred_raw + y_now
     return y_true_eval, pred_raw
-
 
 def summarize_cluster_coverage(train_df: pd.DataFrame, cluster_df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     merged = train_df.merge(cluster_df, on="station_name", how="inner")
@@ -299,11 +299,11 @@ def summarize_cluster_coverage(train_df: pd.DataFrame, cluster_df: pd.DataFrame)
     }
     return coverage.sort_values("cluster").reset_index(drop=True), summary
 
-
 def fit_cluster_models(
     train_df: pd.DataFrame,
     cluster_df: pd.DataFrame,
     target_column: str,
+    feature_columns: list[str],
 ) -> tuple[dict[int, Pipeline], pd.DataFrame]:
     merged = train_df.merge(cluster_df, on="station_name", how="inner")
     coverage, _ = summarize_cluster_coverage(train_df, cluster_df)
@@ -318,12 +318,11 @@ def fit_cluster_models(
         if cluster_train.empty:
             continue
 
-        model = build_pipeline()
-        model.fit(cluster_train[FEATURE_COLUMNS], build_targets(cluster_train, target_column))
+        model = build_pipeline(feature_columns)
+        model.fit(cluster_train[feature_columns], build_targets(cluster_train, target_column))
         models[int(cluster_id)] = model
 
     return models, coverage
-
 
 def apply_cluster_models(
     test_df: pd.DataFrame,
@@ -331,6 +330,7 @@ def apply_cluster_models(
     cluster_df: pd.DataFrame,
     cluster_models: dict[int, Pipeline],
     target_column: str,
+    feature_columns: list[str],
 ):
     pred = base_pred.copy()
     merged = test_df[["station_name"]].merge(cluster_df, on="station_name", how="left")
@@ -341,16 +341,15 @@ def apply_cluster_models(
         mask = (merged["cluster"] == cluster_id).fillna(False).to_numpy()
         if mask.sum() == 0:
             continue
-        pred_raw = model.predict(test_df.loc[mask, FEATURE_COLUMNS])
+        pred_raw = model.predict(test_df.loc[mask, feature_columns])
         _, pred_eval = reconstruct_predictions(test_df.loc[mask], pred_raw, target_column)
         pred[mask] = pred_eval
         model_source[mask] = f"cluster_{cluster_id}"
 
     return pred, merged["cluster"], pd.Series(model_source, index=test_df.index, name="model_source")
 
-
 def main():
-    df, target_column = prepare_dataframe()
+    df, target_column, feature_columns = prepare_dataframe()
     cluster_df = load_cluster_plan()
 
     fold_rows = []
@@ -358,20 +357,21 @@ def main():
     coverage_rows = []
 
     for fold_num, (origin, train_df, test_df) in enumerate(iter_walkforward_splits(df), start=1):
-        global_model = build_pipeline()
-        global_model.fit(train_df[FEATURE_COLUMNS], build_targets(train_df, target_column))
+        global_model = build_pipeline(feature_columns)
+        global_model.fit(train_df[feature_columns], build_targets(train_df, target_column))
 
-        pred_global_raw = global_model.predict(test_df[FEATURE_COLUMNS])
+        pred_global_raw = global_model.predict(test_df[feature_columns])
         y_test_eval, pred_global = reconstruct_predictions(test_df, pred_global_raw, target_column)
         pred_persist = persistence_baseline(test_df)
 
-        cluster_models, coverage = fit_cluster_models(train_df, cluster_df, target_column)
+        cluster_models, coverage = fit_cluster_models(train_df, cluster_df, target_column, feature_columns)
         pred_cluster, cluster_series, model_source = apply_cluster_models(
             test_df=test_df,
             base_pred=pred_global.copy(),
             cluster_df=cluster_df,
             cluster_models=cluster_models,
             target_column=target_column,
+            feature_columns=feature_columns,
         )
 
         global_metrics = evaluate_regression(y_test_eval, pred_global)
@@ -415,8 +415,9 @@ def main():
                 "target_column": target_column,
                 "target_mode": TARGET_MODE,
                 "feature_set": FEATURE_SET,
+                "feature_count": int(len(feature_columns)),
+                "feature_columns_used": ",".join(feature_columns),
                 "horizon_hours": HORIZON_HOURS,
-                "feature_count": int(len(FEATURE_COLUMNS)),
                 "global_rmse": global_metrics["rmse"],
                 "global_mae": global_metrics["mae"],
                 "cluster_rmse": cluster_metrics["rmse"],
@@ -455,11 +456,13 @@ def main():
         "target_column": target_column,
         "target_mode": TARGET_MODE,
         "feature_set": FEATURE_SET,
-        "feature_count": int(len(FEATURE_COLUMNS)),
+        "feature_count": int(len(feature_columns)),
+        "feature_columns_used": feature_columns,
         "max_backtest_months": MAX_BACKTEST_MONTHS,
         "max_stations": MAX_STATIONS,
         "min_cluster_train_rows": MIN_CLUSTER_TRAIN_ROWS,
         "min_cluster_stations": MIN_CLUSTER_STATIONS,
+        "max_feature_null_fraction": MAX_FEATURE_NULL_FRACTION,
         "mean_global_rmse": float(folds_df["global_rmse"].mean()),
         "mean_cluster_rmse": float(folds_df["cluster_rmse"].mean()),
         "mean_persist_rmse": float(folds_df["persist_rmse"].mean()),
@@ -482,7 +485,6 @@ def main():
         json.dump(summary, f, indent=2)
 
     print(json.dumps(summary, indent=2))
-
 
 if __name__ == "__main__":
     main()
