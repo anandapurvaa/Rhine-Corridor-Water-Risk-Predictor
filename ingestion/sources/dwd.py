@@ -850,7 +850,22 @@ def run_dwd_ingestion(mode: str = "both") -> None:
         logger.info("dwd_fetch_complete rows=0 after_incremental_filter")
         return
 
-    merged = filter_by_feature_overlap(merged, cfg)
+    overlap_cfg = dict(cfg)
+
+    if mode == "recent":
+        overlap_cfg["min_fully_populated_rows"] = int(
+            cfg.get("recent_min_fully_populated_rows", 24)
+        )
+
+    logger.info(
+        "dwd_overlap_filter_config mode=%s min_ratio=%s min_rows=%s",
+        mode,
+        overlap_cfg.get("min_feature_overlap_ratio", 0.80),
+        overlap_cfg["min_fully_populated_rows"],
+    )
+
+    merged = filter_by_feature_overlap(merged, overlap_cfg)
+
     if merged.empty:
         logger.info("dwd_fetch_complete rows=0 after_overlap_filter")
         return

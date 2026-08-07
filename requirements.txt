@@ -9,3 +9,15 @@ google-cloud-logging==3.11.2
 tenacity==8.5.0
 python-dateutil==2.9.0.post0
 pytest==8.3.2
+fastapi
+uvicorn[standard]
+google-cloud-bigquery
+pandas
+joblib
+db-dtypes
+dash
+plotly
+requests
+google-cloud-storage
+scikit-learn
+pandas-gbq>=0.26.1

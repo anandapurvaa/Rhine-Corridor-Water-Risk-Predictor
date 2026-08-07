@@ -10,6 +10,7 @@ import joblib
 import pandas as pd
 
 from modeling.data_loader import load_bigquery_table, write_bigquery_table
+from mlops.gcs_utils import download_blob, download_json
 from modeling.schemas import (
     CATEGORICAL_COLUMNS,
     NUMERIC_COLUMNS_LEAN,
@@ -52,23 +53,60 @@ def make_run_id(model_version: str, split_name: str) -> str:
     return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
 
 
-def load_training_summary() -> dict:
-    if not TRAINING_SUMMARY_PATH.exists():
-        raise FileNotFoundError(
-            f"Missing training summary: {TRAINING_SUMMARY_PATH}. "
-            "Run the training script first."
-        )
-    with open(TRAINING_SUMMARY_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+def load_production_artifacts() -> tuple[dict, object, str]:
+    registry_df = load_bigquery_table(
+        "model_registry",
+        dataset="mlops",
+        columns=[
+            "model_version",
+            "status",
+            "gcs_path",
+            "promoted_at_utc",
+        ],
+        where_sql="status = 'prod'",
+        order_by="promoted_at_utc DESC",
+        allow_missing_columns=False,
+    )
 
-
-def load_model():
-    if not MODEL_PATH.exists():
-        raise FileNotFoundError(
-            f"Missing production model: {MODEL_PATH}. "
-            "Run the training script first."
+    if registry_df.empty:
+        raise RuntimeError(
+            "No production model found in mlops.model_registry."
         )
-    return joblib.load(MODEL_PATH)
+
+    registry_row = registry_df.iloc[0]
+    model_version = str(registry_row["model_version"])
+    model_gcs_path = str(registry_row["gcs_path"])
+
+    if not model_gcs_path.startswith("gs://"):
+        raise ValueError(
+            f"Invalid production model GCS path: {model_gcs_path}"
+        )
+
+    bucket_name = model_gcs_path[5:].split("/", 1)[0]
+    summary_gcs_path = (
+        f"gs://{bucket_name}/artifacts/"
+        f"{model_version}/training_summary.json"
+    )
+
+    model_path = OUTPUT_DIR / f"model_{model_version}.joblib"
+    download_blob(model_gcs_path, model_path)
+
+    training_summary = download_json(summary_gcs_path)
+
+    summary_version = training_summary.get("model_version")
+    if summary_version != model_version:
+        raise RuntimeError(
+            "Model/summary version mismatch: "
+            f"registry={model_version}, summary={summary_version}"
+        )
+
+    model = joblib.load(model_path)
+
+    print(f"Loaded production model: {model_version}")
+    print(f"Model source: {model_gcs_path}")
+    print(f"Summary source: {summary_gcs_path}")
+
+    return training_summary, model, model_version
 
 
 def resolve_feature_columns(training_summary: dict, df: pd.DataFrame) -> list[str]:
@@ -248,12 +286,9 @@ def build_summary(pred_df: pd.DataFrame, training_summary: dict, feature_columns
 
 
 def main():
-    training_summary = load_training_summary()
-    model_version = training_summary["model_version"]
+    training_summary, model, model_version = load_production_artifacts()
     target_mode = training_summary.get("target_mode", "level")
     horizon_hours = HORIZON_HOURS
-
-    model = load_model()
     inference_df, target_column, feature_columns = prepare_inference_frame(horizon_hours, training_summary)
     validate_inference_frame(inference_df, feature_columns)
 

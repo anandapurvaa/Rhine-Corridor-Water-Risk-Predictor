@@ -1,0 +1,29 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY daily_pipeline.py .
+COPY ingestion/ ./ingestion/
+COPY modeling/ ./modeling/
+COPY mlops/ ./mlops/
+COPY ingestion/ ./ingestion/
+COPY config/ ./config/
+COPY sql/ ./sql/
+
+ENV PYTHONPATH=/app
+ENV GCP_PROJECT_ID=rhine-corridor-navigator
+ENV GCP_REGION=europe-west3
+ENV GAUGE24H_PRED_SPLIT=test
+ENV GAUGE24H_HORIZON_HOURS=24
+
+RUN test -f /app/config/rhine_gauges.yaml
+RUN test -f /app/sql/raw/raw_tables.sql
+
+CMD ["python", "daily_pipeline.py"]

@@ -34,7 +34,12 @@ default_run_mode: "recent"
 
 min_variable_families: 4
 min_feature_overlap_ratio: 0.80
+
+# Historical data has many rows per station.
 min_fully_populated_rows: 5000
+
+# Recent mode only contains the incremental lookback window.
+recent_min_fully_populated_rows: 24
 
 target_station_ids:
   # Core Rhine corridor anchors
