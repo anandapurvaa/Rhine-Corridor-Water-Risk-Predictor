@@ -64,7 +64,7 @@ JOB_TYPE = "daily_ingestion_prediction"
 logger = logging.getLogger(__name__)
 
 
-def _ensure_utc(value) -> datetime:
+def _ensure_utc(value: datetime) -> datetime:
     if value is None:
         raise RuntimeError("Timestamp value is NULL")
 
@@ -109,9 +109,7 @@ def _query_latest_complete_input() -> datetime:
         ).result()
     )
 
-    return _ensure_utc(
-        row["latest_timestamp_utc"]
-    )
+    return _ensure_utc(row["latest_timestamp_utc"])
 
 
 def assert_input_freshness() -> dict[str, Any]:
@@ -161,6 +159,7 @@ def run_stage(
         logger.info(
             "stage_started",
             extra={
+                "run_id": run.run_id,
                 "stage_name": stage_name,
             },
         )
@@ -174,6 +173,7 @@ def run_stage(
         logger.info(
             "stage_completed",
             extra={
+                "run_id": run.run_id,
                 "stage_name": stage_name,
                 "duration_seconds": (
                     stage.duration_seconds
@@ -188,6 +188,48 @@ def run_stage(
     )
 
     return summary
+
+
+def _resolve_data_quality_status(
+    summary: dict[str, Any],
+) -> str:
+    for key in (
+        "data_quality_status",
+        "quality_status",
+        "status",
+        "result",
+    ):
+        value = summary.get(key)
+
+        if value is not None:
+            normalized = str(value).strip().lower()
+
+            if normalized in {
+                "pass",
+                "passed",
+                "success",
+                "successful",
+                "ok",
+            }:
+                return "pass"
+
+            if normalized in {
+                "fail",
+                "failed",
+                "failure",
+                "error",
+            }:
+                return "fail"
+
+    failed_checks = summary.get("failed_checks")
+
+    if isinstance(failed_checks, int):
+        return "fail" if failed_checks > 0 else "pass"
+
+    if isinstance(failed_checks, (list, tuple, set)):
+        return "fail" if failed_checks else "pass"
+
+    return "pass"
 
 
 def main() -> None:
@@ -215,6 +257,7 @@ def main() -> None:
         extra={
             "run_id": run.run_id,
             "job_type": JOB_TYPE,
+            "input_split": PRED_SPLIT,
         },
     )
 
@@ -256,13 +299,37 @@ def main() -> None:
             run_prediction,
         )
 
-        run_stage(
+        data_quality_summary = run_stage(
             run,
             "data_quality_checks",
             lambda: run_data_quality_checks(
-                run_id=run.run_id
+                run_id=run.run_id,
             ),
         )
+
+        data_quality_status = _resolve_data_quality_status(
+            data_quality_summary
+        )
+
+        logger.info(
+            "data_quality_checks_completed",
+            extra={
+                "run_id": run.run_id,
+                "data_quality_status": data_quality_status,
+                "failed_checks": (
+                    data_quality_summary.get(
+                        "failed_checks",
+                        [],
+                    )
+                ),
+                **data_quality_summary,
+            },
+        )
+
+        if data_quality_status == "fail":
+            raise RuntimeError(
+                "Data-quality checks failed"
+            )
 
         run.complete(status="success")
 
@@ -286,6 +353,7 @@ def main() -> None:
             extra={
                 "run_id": run.run_id,
                 "error_type": type(exc).__name__,
+                "error_message": str(exc),
             },
         )
 
