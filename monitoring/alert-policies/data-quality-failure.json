@@ -1,0 +1,36 @@
+{
+  "displayName": "Rhine daily data-quality failure",
+  "documentation": {
+    "content": "The latest daily pipeline reported one or more failed data-quality metrics. Check mlops.data_quality_metrics and the data_quality_checks stage.",
+    "mimeType": "text/markdown"
+  },
+  "combiner": "OR",
+  "conditions": [
+    {
+      "displayName": "Data-quality failure count is greater than zero",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/rhine_daily_pipeline_quality_failures\" resource.type=\"cloud_run_job\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 0,
+        "duration": "0s",
+        "aggregations": [
+          {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_SUM",
+            "crossSeriesReducer": "REDUCE_SUM"
+          }
+        ],
+        "trigger": {
+          "count": 1
+        }
+      }
+    }
+  ],
+  "notificationChannels": [
+    "projects/rhine-corridor-navigator/notificationChannels/5841203484534699387"
+  ],
+  "alertStrategy": {
+    "autoClose": "86400s"
+  },
+  "enabled": true
+}

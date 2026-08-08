@@ -1,0 +1,36 @@
+{
+  "displayName": "Rhine daily pipeline failure",
+  "documentation": {
+    "content": "The rhine-daily-pipeline Cloud Run Job reported a pipeline_failed event. Check Cloud Run execution logs and mlops.pipeline_runs.",
+    "mimeType": "text/markdown"
+  },
+  "combiner": "OR",
+  "conditions": [
+    {
+      "displayName": "Daily pipeline failure count is greater than zero",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/rhine_daily_pipeline_failures\" resource.type=\"cloud_run_job\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 0,
+        "duration": "0s",
+        "aggregations": [
+          {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_SUM",
+            "crossSeriesReducer": "REDUCE_SUM"
+          }
+        ],
+        "trigger": {
+          "count": 1
+        }
+      }
+    }
+  ],
+  "notificationChannels": [
+    "projects/rhine-corridor-navigator/notificationChannels/5841203484534699387"
+  ],
+  "alertStrategy": {
+    "autoClose": "86400s"
+  },
+  "enabled": true
+}
