@@ -208,8 +208,11 @@ def iter_walkforward_splits(df: pd.DataFrame):
     step_delta = pd.Timedelta(days=STEP_DAYS)
     horizon_delta = pd.Timedelta(hours=HORIZON_HOURS)
 
+    # Capping training data strictly to the end of 2025
+    max_train_ts = pd.Timestamp("2025-12-31 23:59:59", tz="UTC")
+
     while origin + horizon_delta <= last_ts:
-        train_mask = df["timestamp_utc"] < origin
+        train_mask = (df["timestamp_utc"] < origin) & (df["timestamp_utc"] <= max_train_ts)
         test_mask = (df["timestamp_utc"] >= origin) & (df["timestamp_utc"] < origin + step_delta)
 
         train_df = df.loc[train_mask].copy()
@@ -374,8 +377,12 @@ def main():
     with open(OUTPUT_DIR / "gauge_24h_walkforward_summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
 
+    # Ensure final model also adheres to the training cutoff
+    max_train_ts = pd.Timestamp("2025-12-31 23:59:59", tz="UTC")
+    final_train_df = df[df["timestamp_utc"] <= max_train_ts].copy()
+    
     final_model = build_pipeline(feature_columns)
-    final_model.fit(df[feature_columns], build_targets(df, target_column))
+    final_model.fit(final_train_df[feature_columns], build_targets(final_train_df, target_column))
     joblib.dump(final_model, OUTPUT_DIR / "gauge_24h_walkforward_last_model.joblib")
 
     print(json.dumps(summary, indent=2))

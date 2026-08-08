@@ -236,8 +236,11 @@ def iter_walkforward_splits(df: pd.DataFrame):
     step_delta = pd.to_timedelta(STEP_DAYS, unit="D")
     horizon_delta = pd.to_timedelta(HORIZON_HOURS, unit="h")
 
+    # Capping training data strictly to the end of 2025
+    max_train_ts = pd.Timestamp("2025-12-31 23:59:59", tz="UTC")
+
     while origin + horizon_delta <= last_ts:
-        train_mask = df["timestamp_utc"] < origin
+        train_mask = (df["timestamp_utc"] < origin) & (df["timestamp_utc"] <= max_train_ts)
         test_mask = (df["timestamp_utc"] >= origin) & (df["timestamp_utc"] < origin + step_delta)
 
         train_df = df.loc[train_mask].copy()
