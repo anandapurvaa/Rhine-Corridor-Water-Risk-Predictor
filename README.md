@@ -365,3 +365,5 @@ Current status of the project so far:
 - Best current model family identified.
 
 Cloud Build CI trigger test
+
+Test dedicated CI trigger
