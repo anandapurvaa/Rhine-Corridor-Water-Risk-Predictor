@@ -371,3 +371,5 @@ Test dedicated CI trigger
 Test dedicated CI trigger
 
 Test dedicated CI trigger v2
+
+CI trigger logging permission check
