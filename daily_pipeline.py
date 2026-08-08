@@ -1,14 +1,40 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 import os
+from typing import Any, Callable
 
 from google.cloud import bigquery
 
 from ingestion.main import run_source_ingestion
-from ingestion.stages.run_sql_stage_1_foundation import run_stage1_sql
-from ingestion.stages.run_sql_stage_2_modeling import run_stage2_sql
-from modeling.predict_gauge_24h_production import main as run_prediction
+from ingestion.stages.run_sql_stage_1_foundation import (
+    run_stage1_sql,
+)
+from ingestion.stages.run_sql_stage_2_modeling import (
+    run_stage2_sql,
+)
+from modeling.predict_gauge_24h_production import (
+    main as run_prediction,
+)
+from mlops.audit import (
+    record_pipeline_run,
+    record_stage_event,
+)
+from mlops.data_quality import (
+    run_data_quality_checks,
+)
+from mlops.run_context import (
+    PipelineRun,
+    StageContext,
+)
+from mlops.structured_logging import (
+    configure_logging,
+)
+from mlops.summary import (
+    apply_summary,
+    normalize_summary,
+)
 
 
 PROJECT_ID = os.getenv(
@@ -32,6 +58,10 @@ MAX_INPUT_AGE_HOURS = float(
         "72",
     )
 )
+
+JOB_TYPE = "daily_ingestion_prediction"
+
+logger = logging.getLogger(__name__)
 
 
 def _ensure_utc(value) -> datetime:
@@ -79,55 +109,191 @@ def _query_latest_complete_input() -> datetime:
         ).result()
     )
 
-    return _ensure_utc(row["latest_timestamp_utc"])
+    return _ensure_utc(
+        row["latest_timestamp_utc"]
+    )
 
 
-def assert_input_freshness() -> None:
+def assert_input_freshness() -> dict[str, Any]:
     latest_input = _query_latest_complete_input()
     now_utc = datetime.now(timezone.utc)
-    age_hours = (now_utc - latest_input).total_seconds() / 3600
 
-    print(
-        "Input freshness check: "
-        f"split={PRED_SPLIT} "
-        f"latest_complete_input_utc={latest_input.isoformat()} "
-        f"age_hours={age_hours:.1f} "
-        f"max_age_hours={MAX_INPUT_AGE_HOURS:.1f}"
+    age_hours = (
+        now_utc - latest_input
+    ).total_seconds() / 3600
+
+    logger.info(
+        "input_freshness_check",
+        extra={
+            "input_split": PRED_SPLIT,
+            "latest_complete_input_utc": (
+                latest_input.isoformat()
+            ),
+            "input_age_hours": round(age_hours, 2),
+            "max_input_age_hours": MAX_INPUT_AGE_HOURS,
+        },
     )
 
     if age_hours > MAX_INPUT_AGE_HOURS:
         raise RuntimeError(
             "Prediction input is stale: "
-            f"latest_complete_input_utc={latest_input.isoformat()}, "
+            f"latest_complete_input_utc="
+            f"{latest_input.isoformat()}, "
             f"age_hours={age_hours:.1f}, "
             f"max_age_hours={MAX_INPUT_AGE_HOURS:.1f}"
         )
 
+    return {
+        "latest_input_timestamp": (
+            latest_input.isoformat()
+        ),
+        "input_age_hours": round(age_hours, 2),
+        "prediction_split": PRED_SPLIT,
+    }
 
-def main() -> None:
-    print("=== Daily ingestion ===")
-    run_source_ingestion(
-        source="all",
-        mode="recent",
-        hours=72,
-        from_date=None,
-        to_date=None,
-        chunk_months=1,
+
+def run_stage(
+    run: PipelineRun,
+    stage_name: str,
+    function: Callable[[], Any],
+) -> dict[str, Any]:
+    with StageContext(stage_name) as stage:
+        logger.info(
+            "stage_started",
+            extra={
+                "stage_name": stage_name,
+            },
+        )
+
+        result = function()
+        summary = normalize_summary(result)
+
+        stage.metadata.update(summary)
+        apply_summary(run.metadata, summary)
+
+        logger.info(
+            "stage_completed",
+            extra={
+                "stage_name": stage_name,
+                "duration_seconds": (
+                    stage.duration_seconds
+                ),
+                **summary,
+            },
+        )
+
+    record_stage_event(
+        run=run,
+        stage=stage,
     )
 
-    print("=== Stage 1 foundation ===")
-    run_stage1_sql()
+    return summary
 
-    print("=== Stage 2 modeling ===")
-    run_stage2_sql()
 
-    print("=== Input freshness check ===")
-    assert_input_freshness()
+def main() -> None:
+    configure_logging(
+        os.getenv("LOG_LEVEL", "INFO")
+    )
 
-    print("=== Production prediction ===")
-    run_prediction()
+    run = PipelineRun(
+        job_type=JOB_TYPE,
+        metadata={
+            "cloud_run_job": os.getenv(
+                "CLOUD_RUN_JOB",
+                "rhine-daily-pipeline",
+            ),
+            "project_id": PROJECT_ID,
+            "region": REGION,
+            "input_split": PRED_SPLIT,
+        },
+    ).start()
 
-    print("=== Daily pipeline completed successfully ===")
+    os.environ["MLOPS_RUN_ID"] = run.run_id
+
+    logger.info(
+        "pipeline_started",
+        extra={
+            "run_id": run.run_id,
+            "job_type": JOB_TYPE,
+        },
+    )
+
+    try:
+        run_stage(
+            run,
+            "daily_ingestion",
+            lambda: run_source_ingestion(
+                source="all",
+                mode="recent",
+                hours=72,
+                from_date=None,
+                to_date=None,
+                chunk_months=1,
+            ),
+        )
+
+        run_stage(
+            run,
+            "stage_1_foundation",
+            run_stage1_sql,
+        )
+
+        run_stage(
+            run,
+            "stage_2_modeling",
+            run_stage2_sql,
+        )
+
+        run_stage(
+            run,
+            "input_freshness_check",
+            assert_input_freshness,
+        )
+
+        run_stage(
+            run,
+            "production_prediction",
+            run_prediction,
+        )
+
+        run_stage(
+            run,
+            "data_quality_checks",
+            lambda: run_data_quality_checks(
+                run_id=run.run_id
+            ),
+        )
+
+        run.complete(status="success")
+
+        logger.info(
+            "pipeline_completed",
+            extra={
+                "run_id": run.run_id,
+                "status": run.status,
+                "duration_seconds": (
+                    run.duration_seconds
+                ),
+                **run.metadata,
+            },
+        )
+
+    except Exception as exc:
+        run.fail(exc)
+
+        logger.exception(
+            "pipeline_failed",
+            extra={
+                "run_id": run.run_id,
+                "error_type": type(exc).__name__,
+            },
+        )
+
+        raise
+
+    finally:
+        record_pipeline_run(run)
+        run.close()
 
 
 if __name__ == "__main__":

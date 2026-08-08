@@ -24,38 +24,56 @@ def load_sql(path: Path) -> str:
     return text.strip()
 
 
-def run_sql_file(client: bigquery.Client, file_path: Path) -> None:
+def run_sql_file(client: bigquery.Client, file_path: Path) -> dict:
     sql = load_sql(file_path)
     if not sql:
         print(f"[SKIP] {file_path} is empty")
-        return
+        return {
+            "file": str(file_path),
+            "status": "skipped",
+        }
 
     print(f"[RUN ] {file_path}")
     job = client.query(sql)
     result = job.result()
     print(f"[DONE] {file_path} | job_id={job.job_id}")
 
+    preview_rows = []
     try:
         preview = list(result[:10])
         if preview:
             print(f"[INFO] {file_path} previewed {len(preview)} row(s)")
             for row in preview:
+                preview_rows.append(dict(row))
                 print(dict(row))
     except Exception:
         pass
 
+    return {
+        "file": str(file_path),
+        "status": "success",
+        "job_id": job.job_id,
+        "preview_rows": preview_rows,
+    }
 
-def run_stage2_sql() -> None:
+
+def run_stage2_sql() -> dict:
     client = bigquery.Client(project=PROJECT_ID, location=LOCATION)
 
+    results = []
     for i, rel_path in enumerate(SQL_FILES, start=1):
         file_path = SQL_ROOT / rel_path
         if not file_path.exists():
             raise FileNotFoundError(f"Missing SQL file: {file_path}")
         print(f"\n[Stage 2: {i}/{len(SQL_FILES)}]")
-        run_sql_file(client, file_path)
+        results.append(run_sql_file(client, file_path))
 
     print("Stage 2 SQL files completed successfully.")
+    return {
+        "stage": "stage2",
+        "files_executed": len(SQL_FILES),
+        "results": results,
+    }
 
 
 if __name__ == "__main__":

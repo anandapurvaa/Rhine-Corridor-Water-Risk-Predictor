@@ -218,23 +218,48 @@ def score_frame(
     X = result[feature_columns].copy()
 
     pred_raw = model.predict(X)
+
     if target_mode == "delta":
-        y_now = pd.to_numeric(result["target_value"], errors="coerce").to_numpy()
+        y_now = pd.to_numeric(
+            result["target_value"],
+            errors="coerce",
+        ).to_numpy()
+
         result["prediction"] = pred_raw + y_now
+
     elif target_mode == "level":
         result["prediction"] = pred_raw
+
     else:
-        raise ValueError(f"Unsupported target_mode={target_mode!r}")
+        raise ValueError(
+            f"Unsupported target_mode={target_mode!r}"
+        )
+
+    pipeline_run_id = os.getenv(
+        "MLOPS_RUN_ID"
+    )
+
+    if not pipeline_run_id:
+        pipeline_run_id = make_run_id(
+            model_version,
+            PRED_SPLIT_ENV,
+        )
 
     result["model_version"] = model_version
-    result["run_id"] = [make_run_id(model_version, s) for s in result["split_name"].astype(str)]
+    result["run_id"] = pipeline_run_id
     result["target_column"] = target_column
     result["target_mode"] = target_mode
-    result["prediction_horizon_hours"] = horizon_hours
+    result["prediction_horizon_hours"] = (
+        horizon_hours
+    )
 
     if target_column in result.columns:
-        result["actual_if_available"] = result[target_column]
-        result["actual_available_now"] = result[target_column].notna()
+        result["actual_if_available"] = (
+            result[target_column]
+        )
+        result["actual_available_now"] = (
+            result[target_column].notna()
+        )
     else:
         result["actual_if_available"] = pd.NA
         result["actual_available_now"] = False
@@ -258,11 +283,27 @@ def score_frame(
         "target_column",
     ] + feature_columns
 
-    output_cols = [c for c in output_cols if c in result.columns]
-    output_cols = list(dict.fromkeys(output_cols))
+    output_cols = [
+        column
+        for column in output_cols
+        if column in result.columns
+    ]
 
-    return result[output_cols].sort_values(["split_name", "station_name", "timestamp_utc"]).reset_index(drop=True)
+    output_cols = list(
+        dict.fromkeys(output_cols)
+    )
 
+    return (
+        result[output_cols]
+        .sort_values(
+            [
+                "split_name",
+                "station_name",
+                "timestamp_utc",
+            ]
+        )
+        .reset_index(drop=True)
+    )
 
 def build_summary(pred_df: pd.DataFrame, training_summary: dict, feature_columns: list[str]) -> dict:
     return {
@@ -327,6 +368,7 @@ def main():
     print(f"\nWrote: {PREDICTIONS_CSV}")
     print(f"Wrote BigQuery table: rhein_curated.{table_name}")
     print(f"Wrote: {PREDICTIONS_SUMMARY_JSON}")
+    return summary
 
 
 if __name__ == "__main__":

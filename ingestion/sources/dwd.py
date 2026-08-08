@@ -789,7 +789,7 @@ def apply_proxy_backfill(
     return out, backfill_df
 
 
-def run_dwd_ingestion(mode: str = "both") -> None:
+def run_dwd_ingestion(mode: str = "both") -> dict:
     cfg = load_dwd_config()
     scope_cfg = load_station_scope()
     base_url = cfg["base_url"]
@@ -810,7 +810,13 @@ def run_dwd_ingestion(mode: str = "both") -> None:
 
     if station_meta.empty:
         logger.info("dwd_fetch_complete rows=0")
-        return
+        return {
+            "source": "dwd",
+            "mode": mode,
+            "rows_ingested": 0,
+            "stations_processed": 0,
+            "proxy_backfilled_rows": 0,
+        }
 
     valid_station_ids = set(station_meta["station_id_norm"])
     canonical_frames = []
@@ -843,12 +849,24 @@ def run_dwd_ingestion(mode: str = "both") -> None:
     merged = merge_variable_frames(canonical_frames)
     if merged.empty:
         logger.info("dwd_fetch_complete rows=0")
-        return
+        return {
+            "source": "dwd",
+            "mode": mode,
+            "rows_ingested": 0,
+            "stations_processed": 0,
+            "proxy_backfilled_rows": 0,
+        }
 
     merged = apply_incremental_recent_filter(merged, mode=mode, cfg=cfg)
     if merged.empty:
         logger.info("dwd_fetch_complete rows=0 after_incremental_filter")
-        return
+        return {
+            "source": "dwd",
+            "mode": mode,
+            "rows_ingested": 0,
+            "stations_processed": 0,
+            "proxy_backfilled_rows": 0,
+        }
 
     overlap_cfg = dict(cfg)
 
@@ -868,7 +886,13 @@ def run_dwd_ingestion(mode: str = "both") -> None:
 
     if merged.empty:
         logger.info("dwd_fetch_complete rows=0 after_overlap_filter")
-        return
+        return {
+            "source": "dwd",
+            "mode": mode,
+            "rows_ingested": 0,
+            "stations_processed": 0,
+            "proxy_backfilled_rows": 0,
+        }
 
     merged = attach_station_metadata(merged, station_meta)
     merged = merged.sort_values(["dwd_station_id", "timestamp_utc"]).reset_index(drop=True)
@@ -962,3 +986,18 @@ def run_dwd_ingestion(mode: str = "both") -> None:
         merged["timestamp_utc"].max() if not merged.empty else None,
         int(merged["is_proxy_backfilled"].sum()) if "is_proxy_backfilled" in merged.columns else 0,
     )
+
+    return {
+        "source": "dwd",
+        "mode": mode,
+        "rows_ingested": int(len(merged)),
+        "stations_processed": int(
+            merged["dwd_station_id"].nunique()
+        ) if not merged.empty else 0,
+        "proxy_backfilled_rows": int(
+            merged["is_proxy_backfilled"].sum()
+        ) if (
+            not merged.empty
+            and "is_proxy_backfilled" in merged.columns
+        ) else 0,
+    }

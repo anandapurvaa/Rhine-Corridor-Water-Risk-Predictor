@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
 
 from google.cloud import bigquery
 
@@ -17,9 +16,7 @@ REGION = os.getenv(
     "europe-west3",
 ).strip()
 
-REGISTRY_TABLE = (
-    f"{PROJECT_ID}.mlops.model_registry"
-)
+REGISTRY_TABLE = f"{PROJECT_ID}.mlops.model_registry"
 
 RMSE_TOLERANCE = float(
     os.getenv(
@@ -29,15 +26,16 @@ RMSE_TOLERANCE = float(
 )
 
 
-def get_latest_models(
+def load_ranked_models(
     client: bigquery.Client,
-) -> tuple[dict | None, dict | None]:
+) -> list[dict]:
     query = f"""
         SELECT
             model_version,
             status,
             gcs_path,
             trained_at_utc,
+            promoted_at_utc,
             evaluation_metrics_json
         FROM `{REGISTRY_TABLE}`
         WHERE status IN ('prod', 'staging')
@@ -51,51 +49,58 @@ def get_latest_models(
         ).result()
     )
 
-    production = None
-    staging = None
+    models = []
 
     for row in rows:
         record = dict(row)
+        raw_metrics = record.get("evaluation_metrics_json")
 
-        if record["status"] == "prod" and production is None:
-            production = record
+        if not raw_metrics:
+            print(
+                f"Skipping {record['model_version']}: "
+                "evaluation_metrics_json is empty."
+            )
+            continue
 
-        if record["status"] == "staging" and staging is None:
-            staging = record
+        try:
+            metrics = (
+                json.loads(raw_metrics)
+                if isinstance(raw_metrics, str)
+                else raw_metrics
+            )
 
-        if production is not None and staging is not None:
-            break
+            rmse = float(metrics["rmse"])
+            mae = float(metrics["mae"])
 
-    return production, staging
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as exc:
+            print(
+                f"Skipping {record['model_version']}: "
+                f"invalid evaluation metrics: {exc}"
+            )
+            continue
+
+        record["rmse"] = rmse
+        record["mae"] = mae
+        models.append(record)
+
+    return sorted(
+        models,
+        key=lambda model: (
+            model["rmse"],
+            model["mae"],
+            str(model.get("trained_at_utc") or ""),
+        ),
+    )
 
 
-def read_rmse(model_record: dict) -> float:
-    raw_metrics = model_record.get("evaluation_metrics_json")
-
-    if not raw_metrics:
-        raise RuntimeError(
-            f"Missing evaluation metrics for "
-            f"{model_record['model_version']}"
-        )
-
-    if isinstance(raw_metrics, str):
-        metrics = json.loads(raw_metrics)
-    else:
-        metrics = raw_metrics
-
-    rmse = metrics.get("rmse")
-
-    if rmse is None:
-        raise RuntimeError(
-            f"Missing RMSE for {model_record['model_version']}"
-        )
-
-    return float(rmse)
-
-
-def promote_candidate(
+def promote_model(
     client: bigquery.Client,
-    candidate_version: str,
+    winning_model_version: str,
 ) -> None:
     query = f"""
         BEGIN TRANSACTION;
@@ -112,10 +117,10 @@ def promote_candidate(
             promoted_at_utc = CURRENT_TIMESTAMP(),
             notes = CONCAT(
                 COALESCE(notes, ''),
-                ' Automatically promoted after RMSE gate at ',
+                ' Selected as best validation model at ',
                 CAST(CURRENT_TIMESTAMP() AS STRING)
             )
-        WHERE model_version = @candidate_version
+        WHERE model_version = @winning_model_version
           AND status = 'staging';
 
         COMMIT TRANSACTION;
@@ -124,9 +129,9 @@ def promote_candidate(
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
             bigquery.ScalarQueryParameter(
-                "candidate_version",
+                "winning_model_version",
                 "STRING",
-                candidate_version,
+                winning_model_version,
             )
         ]
     )
@@ -138,51 +143,85 @@ def promote_candidate(
     ).result()
 
 
-def main() -> None:
+def main() -> str:
     client = bigquery.Client(
         project=PROJECT_ID,
         location=REGION,
     )
 
-    production, staging = get_latest_models(client)
+    ranked_models = load_ranked_models(client)
 
-    if staging is None:
+    if not ranked_models:
         raise RuntimeError(
-            "No staging model is available for promotion."
+            "No prod or staging models with valid evaluation metrics found."
         )
 
-    staging_version = staging["model_version"]
-    staging_rmse = read_rmse(staging)
+    print("=== Model ranking by validation RMSE ===")
 
-    if production is None:
+    for rank, model in enumerate(ranked_models, start=1):
         print(
-            "No existing production model found. "
-            f"Promoting {staging_version}."
+            f"{rank}. "
+            f"{model['model_version']} | "
+            f"status={model['status']} | "
+            f"RMSE={model['rmse']:.6f} | "
+            f"MAE={model['mae']:.6f}"
         )
-        promote_candidate(client, staging_version)
-        return
 
-    production_version = production["model_version"]
-    production_rmse = read_rmse(production)
+    winner = ranked_models[0]
+    winner_version = winner["model_version"]
+    winner_status = winner["status"]
 
-    threshold = production_rmse + RMSE_TOLERANCE
+    current_prod = next(
+        (
+            model
+            for model in ranked_models
+            if model["status"] == "prod"
+        ),
+        None,
+    )
 
-    print(f"Candidate model: {staging_version}")
-    print(f"Candidate RMSE:  {staging_rmse:.6f}")
-    print(f"Current prod:    {production_version}")
-    print(f"Production RMSE: {production_rmse:.6f}")
-    print(f"Promotion limit: {threshold:.6f}")
+    if current_prod is not None:
+        promotion_limit = (
+            current_prod["rmse"] + RMSE_TOLERANCE
+        )
 
-    if staging_rmse <= threshold:
-        promote_candidate(client, staging_version)
         print(
-            "PROMOTED: candidate RMSE passed the production gate."
+            f"Current production RMSE: "
+            f"{current_prod['rmse']:.6f}"
         )
-    else:
         print(
-            "NOT PROMOTED: candidate RMSE did not pass the "
-            "production gate. Current prod remains active."
+            f"Promotion limit: "
+            f"{promotion_limit:.6f}"
         )
+
+    if winner_status == "prod":
+        print(
+            "KEEPING current production model: "
+            f"{winner_version}"
+        )
+        return winner_version
+
+    if current_prod is not None:
+        if winner["rmse"] > current_prod["rmse"] + RMSE_TOLERANCE:
+            print(
+                "NOT PROMOTED: winning staging model did not "
+                "beat the current production model."
+            )
+            return current_prod["model_version"]
+
+    print(
+        "PROMOTING validation winner: "
+        f"{winner_version}"
+    )
+
+    promote_model(client, winner_version)
+
+    print(
+        "PROMOTED: "
+        f"{winner_version} is now the production model."
+    )
+
+    return winner_version
 
 
 if __name__ == "__main__":

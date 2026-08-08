@@ -159,7 +159,7 @@ def fetch_station_timeseries_measurements(
     return records
 
 
-def run_pegelonline_ingestion(mode: str = "incremental", hours: int = 72) -> None:
+def run_pegelonline_ingestion(mode: str = "incremental", hours: int = 72) -> dict:
     url = f"{settings.pegelonline_base_url}/stations.json?includeTimeseries=true&includeCurrentMeasurement=true"
     logger.info("fetch_start source=pegelonline url=%s mode=%s hours=%s", url, mode, hours)
     logger.info(
@@ -262,3 +262,23 @@ def run_pegelonline_ingestion(mode: str = "incremental", hours: int = 72) -> Non
         station_failed,
         df["station_id"].nunique() if not df.empty else 0,
     )
+
+    return {
+        "source": "pegelonline",
+        "mode": mode,
+        "rows_ingested": int(len(df)),
+        "stations_processed": int(
+            df["station_id"].nunique()
+        ) if not df.empty else 0,
+        "stations_failed": int(station_failed),
+        "watermark_after": (
+            df["timestamp_utc"].max().isoformat()
+            if not df.empty
+            else None
+        ),
+        "watermark_before": (
+            previous_watermark.get("max_observed_measurement_ts_utc")
+            if previous_watermark
+            else None
+        ),
+    }
