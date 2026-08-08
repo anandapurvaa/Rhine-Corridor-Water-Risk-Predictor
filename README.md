@@ -363,3 +363,13 @@ Current status of the project so far:
 - Clustered pooled modeling validated.
 - Refined cluster plan selected.
 - Best current model family identified.
+
+Cloud Build CI trigger test
+
+Test dedicated CI trigger
+
+Test dedicated CI trigger
+
+Test dedicated CI trigger v2
+
+CI trigger logging permission check
