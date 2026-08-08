@@ -369,3 +369,5 @@ Cloud Build CI trigger test
 Test dedicated CI trigger
 
 Test dedicated CI trigger
+
+Test dedicated CI trigger v2
