@@ -5,11 +5,7 @@ steps:
     args:
       - "-c"
       - |
-        python -m compileall \
-          daily_pipeline.py \
-          mlops \
-          ingestion \
-          modeling
+        python -m compileall daily_pipeline.py mlops ingestion modeling
 
   - name: "python:3.11-slim"
     id: "python-tests"
@@ -48,6 +44,7 @@ steps:
       - "--project=${PROJECT_ID}"
       - "--region=${_REGION}"
       - "--image=${_IMAGE}"
+      - "--set-env-vars=GAUGE24H_PRED_SPLIT=production,GAUGE24H_HORIZON_HOURS=24"
 
 images:
   - "${_IMAGE}"

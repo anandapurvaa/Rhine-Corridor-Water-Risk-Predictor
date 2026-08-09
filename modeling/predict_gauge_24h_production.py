@@ -40,10 +40,21 @@ WEATHER_REQUIRED_COLUMNS = [
     "relative_humidity_pct",
 ]
 
-# Which split to predict on: "validation" or "test"
-PRED_SPLIT_ENV = os.getenv("GAUGE24H_PRED_SPLIT", "test").strip().lower()
-if PRED_SPLIT_ENV not in {"validation", "test"}:
-    raise ValueError("GAUGE24H_PRED_SPLIT must be 'validation' or 'test'")
+# Which split to predict on: "validation", "test", or "production"
+PRED_SPLIT_ENV = os.getenv(
+    "GAUGE24H_PRED_SPLIT",
+    "test",
+).strip().lower()
+
+if PRED_SPLIT_ENV not in {
+    "validation",
+    "test",
+    "production",
+}:
+    raise ValueError(
+        "GAUGE24H_PRED_SPLIT must be "
+        "'validation', 'test', or 'production'"
+    )
 
 HORIZON_HOURS = int(os.getenv("GAUGE24H_HORIZON_HOURS", "24"))
 
@@ -320,7 +331,11 @@ def build_summary(pred_df: pd.DataFrame, training_summary: dict, feature_columns
         "stations_predicted": int(pred_df["station_name"].nunique()) if len(pred_df) else 0,
         "split_present": pred_df["split_name"].iloc[0] if len(pred_df) else None,
         "source_table": TRAIN_TABLE_NAME,
-        "prediction_table": f"{PREDICTIONS_TABLE_BASE}_{PRED_SPLIT_ENV}",
+        "prediction_table": (
+            PREDICTIONS_TABLE_BASE
+            if PRED_SPLIT_ENV == "production"
+            else f"{PREDICTIONS_TABLE_BASE}_{PRED_SPLIT_ENV}"
+        ),
         "min_forecast_timestamp_utc": pred_df["forecast_timestamp_utc"].min().isoformat() if len(pred_df) else None,
         "max_forecast_timestamp_utc": pred_df["forecast_timestamp_utc"].max().isoformat() if len(pred_df) else None,
     }
@@ -344,7 +359,10 @@ def main():
     )
 
     pred_df.to_csv(PREDICTIONS_CSV, index=False)
-    table_name = f"{PREDICTIONS_TABLE_BASE}_{PRED_SPLIT_ENV}"
+    if PRED_SPLIT_ENV == "production":
+        table_name = PREDICTIONS_TABLE_BASE
+    else:
+        table_name = (f"{PREDICTIONS_TABLE_BASE}_{PRED_SPLIT_ENV}")
     write_bigquery_table(pred_df, table_name, dataset="rhein_curated", if_exists="replace")
 
     summary = build_summary(pred_df, training_summary, feature_columns)
