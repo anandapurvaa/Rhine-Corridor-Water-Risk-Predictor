@@ -264,10 +264,11 @@ def score_frame(
         horizon_hours
     )
 
-    if target_column in result.columns:
-        result["actual_if_available"] = (
-            result[target_column]
-        )
+    if PRED_SPLIT_ENV == "production":
+        result["actual_if_available"] = pd.NA
+        result["actual_available_now"] = False
+    elif target_column in result.columns:
+        result["actual_if_available"] = result[target_column]
         result["actual_available_now"] = (
             result[target_column].notna()
         )
