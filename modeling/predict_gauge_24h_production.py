@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-from pathlib import Path
 from datetime import datetime, timezone
+from pathlib import Path
 import hashlib
 import json
 import os
 
 import joblib
 import pandas as pd
+from google.cloud import bigquery
 
-from modeling.data_loader import load_bigquery_table, write_bigquery_table
+from modeling.data_loader import load_bigquery_table
 from mlops.gcs_utils import download_blob, download_json
 from modeling.schemas import (
     CATEGORICAL_COLUMNS,
@@ -20,17 +21,22 @@ from modeling.schemas import (
     TARGET_COLUMN as DEFAULT_TARGET_COLUMN,
 )
 
+
 OUTPUT_DIR = Path("artifacts")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-MODEL_PATH = OUTPUT_DIR / "gauge_24h_production_model.joblib"
-TRAINING_SUMMARY_PATH = OUTPUT_DIR / "gauge_24h_production_training_summary.json"
+PREDICTIONS_CSV = (
+    OUTPUT_DIR / "gauge_24h_production_predictions.csv"
+)
 
-PREDICTIONS_CSV = OUTPUT_DIR / "gauge_24h_production_predictions.csv"
-PREDICTIONS_SUMMARY_JSON = OUTPUT_DIR / "gauge_24h_production_predictions_summary.json"
+PREDICTIONS_SUMMARY_JSON = (
+    OUTPUT_DIR
+    / "gauge_24h_production_predictions_summary.json"
+)
 
-# Base name; we will append _validation or _test
-PREDICTIONS_TABLE_BASE = "gauge_24h_production_predictions"
+PREDICTIONS_TABLE_BASE = (
+    "gauge_24h_production_predictions"
+)
 
 WEATHER_REQUIRED_COLUMNS = [
     "temperature_c",
@@ -40,7 +46,12 @@ WEATHER_REQUIRED_COLUMNS = [
     "relative_humidity_pct",
 ]
 
-# Which split to predict on: "validation", "test", or "production"
+TIMESTAMP_COLUMNS = [
+    "timestamp_utc",
+    "forecast_timestamp_utc",
+    "prediction_ready_utc",
+]
+
 PRED_SPLIT_ENV = os.getenv(
     "GAUGE24H_PRED_SPLIT",
     "test",
@@ -56,15 +67,56 @@ if PRED_SPLIT_ENV not in {
         "'validation', 'test', or 'production'"
     )
 
-HORIZON_HOURS = int(os.getenv("GAUGE24H_HORIZON_HOURS", "24"))
+HORIZON_HOURS = int(
+    os.getenv(
+        "GAUGE24H_HORIZON_HOURS",
+        "24",
+    )
+)
+
+PROJECT_ID = os.getenv(
+    "GCP_PROJECT_ID",
+    os.getenv(
+        "GOOGLE_CLOUD_PROJECT",
+        "rhine-corridor-navigator",
+    ),
+).strip()
+
+GCP_REGION = os.getenv(
+    "GCP_REGION",
+    "europe-west3",
+).strip()
 
 
-def make_run_id(model_version: str, split_name: str) -> str:
-    seed = f"{model_version}|{split_name}|{datetime.now(timezone.utc).isoformat()}"
-    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
+def make_run_id(
+    model_version: str,
+    split_name: str,
+) -> str:
+    seed = (
+        f"{model_version}|{split_name}|"
+        f"{datetime.now(timezone.utc).isoformat()}"
+    )
+
+    return hashlib.sha256(
+        seed.encode("utf-8")
+    ).hexdigest()[:16]
 
 
-def load_production_artifacts() -> tuple[dict, object, str]:
+def prediction_table_name() -> str:
+    if PRED_SPLIT_ENV == "production":
+        return PREDICTIONS_TABLE_BASE
+
+    return (
+        f"{PREDICTIONS_TABLE_BASE}_"
+        f"{PRED_SPLIT_ENV}"
+    )
+
+
+def load_production_artifacts() -> tuple[
+    dict,
+    object,
+    str,
+]:
     registry_df = load_bigquery_table(
         "model_registry",
         dataset="mlops",
@@ -81,95 +133,248 @@ def load_production_artifacts() -> tuple[dict, object, str]:
 
     if registry_df.empty:
         raise RuntimeError(
-            "No production model found in mlops.model_registry."
+            "No production model found in "
+            "mlops.model_registry."
         )
 
     registry_row = registry_df.iloc[0]
-    model_version = str(registry_row["model_version"])
-    model_gcs_path = str(registry_row["gcs_path"])
+
+    model_version = str(
+        registry_row["model_version"]
+    )
+
+    model_gcs_path = str(
+        registry_row["gcs_path"]
+    )
 
     if not model_gcs_path.startswith("gs://"):
         raise ValueError(
-            f"Invalid production model GCS path: {model_gcs_path}"
+            "Invalid production model GCS path: "
+            f"{model_gcs_path}"
         )
 
-    bucket_name = model_gcs_path[5:].split("/", 1)[0]
+    bucket_name = (
+        model_gcs_path[5:]
+        .split("/", 1)[0]
+    )
+
     summary_gcs_path = (
         f"gs://{bucket_name}/artifacts/"
         f"{model_version}/training_summary.json"
     )
 
-    model_path = OUTPUT_DIR / f"model_{model_version}.joblib"
-    download_blob(model_gcs_path, model_path)
+    model_path = (
+        OUTPUT_DIR
+        / f"model_{model_version}.joblib"
+    )
 
-    training_summary = download_json(summary_gcs_path)
+    download_blob(
+        model_gcs_path,
+        model_path,
+    )
 
-    summary_version = training_summary.get("model_version")
+    training_summary = download_json(
+        summary_gcs_path
+    )
+
+    summary_version = training_summary.get(
+        "model_version"
+    )
+
     if summary_version != model_version:
         raise RuntimeError(
             "Model/summary version mismatch: "
-            f"registry={model_version}, summary={summary_version}"
+            f"registry={model_version}, "
+            f"summary={summary_version}"
         )
 
     model = joblib.load(model_path)
 
-    print(f"Loaded production model: {model_version}")
-    print(f"Model source: {model_gcs_path}")
-    print(f"Summary source: {summary_gcs_path}")
+    print(
+        f"Loaded production model: "
+        f"{model_version}"
+    )
 
-    return training_summary, model, model_version
+    print(
+        f"Model source: {model_gcs_path}"
+    )
+
+    print(
+        f"Summary source: {summary_gcs_path}"
+    )
+
+    return (
+        training_summary,
+        model,
+        model_version,
+    )
 
 
-def resolve_feature_columns(training_summary: dict, df: pd.DataFrame) -> list[str]:
-    trained_features = training_summary.get("feature_columns_used") or training_summary.get("feature_columns") or []
+def resolve_feature_columns(
+    training_summary: dict,
+    df: pd.DataFrame,
+) -> list[str]:
+    trained_features = (
+        training_summary.get(
+            "feature_columns_used"
+        )
+        or training_summary.get(
+            "feature_columns"
+        )
+        or []
+    )
+
     if trained_features:
-        return [c for c in trained_features if c in df.columns]
-    return [c for c in PRODUCTION_FEATURE_COLUMNS if c in df.columns]
+        return [
+            column
+            for column in trained_features
+            if column in df.columns
+        ]
+
+    return [
+        column
+        for column in PRODUCTION_FEATURE_COLUMNS
+        if column in df.columns
+    ]
 
 
-def prepare_inference_frame(horizon_hours: int, training_summary: dict) -> tuple[pd.DataFrame, str, list[str]]:
-    target_column = f"target_value_t_plus_{horizon_hours}h"
+def normalize_timestamp_columns(
+    df: pd.DataFrame,
+) -> pd.DataFrame:
+    result = df.copy()
+
+    for column in TIMESTAMP_COLUMNS:
+        if column not in result.columns:
+            continue
+
+        result[column] = pd.to_datetime(
+            result[column],
+            utc=True,
+            errors="coerce",
+        )
+
+        if result[column].isna().any():
+            raise ValueError(
+                "Invalid or missing timestamp values "
+                f"in column {column!r}"
+            )
+
+    return result
+
+
+def prepare_inference_frame(
+    horizon_hours: int,
+    training_summary: dict,
+) -> tuple[
+    pd.DataFrame,
+    str,
+    list[str],
+]:
+    target_column = (
+        f"target_value_t_plus_"
+        f"{horizon_hours}h"
+    )
+
     requested = list(
         dict.fromkeys(
             PRODUCTION_FEATURE_COLUMNS
-            + [DEFAULT_TARGET_COLUMN, target_column, "target_value", "timestamp_utc", "split_name"]
+            + [
+                DEFAULT_TARGET_COLUMN,
+                target_column,
+                "target_value",
+                "timestamp_utc",
+                "split_name",
+            ]
         )
     )
 
     df = load_bigquery_table(
         TRAIN_TABLE_NAME,
         columns=requested,
-        order_by="timestamp_utc, station_name",
+        order_by=(
+            "timestamp_utc, station_name"
+        ),
         allow_missing_columns=True,
     )
 
-    missing_required = [c for c in ROBUSTNESS_REQUIRED_COLUMNS if c not in df.columns]
-    if missing_required:
-        raise ValueError(f"Missing required inference base columns: {missing_required}")
+    missing_required = [
+        column
+        for column in ROBUSTNESS_REQUIRED_COLUMNS
+        if column not in df.columns
+    ]
 
-    df["timestamp_utc"] = pd.to_datetime(df["timestamp_utc"], utc=True, errors="coerce")
-    df = df.dropna(subset=["timestamp_utc"]).copy()
+    if missing_required:
+        raise ValueError(
+            "Missing required inference "
+            f"base columns: {missing_required}"
+        )
+
+    df["timestamp_utc"] = pd.to_datetime(
+        df["timestamp_utc"],
+        utc=True,
+        errors="coerce",
+    )
+
+    df = df.dropna(
+        subset=["timestamp_utc"]
+    ).copy()
 
     if "split_name" not in df.columns:
-        raise ValueError("Inference table must include split_name column.")
-    df["split_name"] = df["split_name"].astype("string").str.lower()
-    df = df[df["split_name"] == PRED_SPLIT_ENV].copy()
+        raise ValueError(
+            "Inference table must include "
+            "split_name column."
+        )
 
-    for col in CATEGORICAL_COLUMNS:
-        if col in df.columns:
-            df[col] = df[col].astype("string")
+    df["split_name"] = (
+        df["split_name"]
+        .astype("string")
+        .str.lower()
+    )
 
-    numeric_cols = list(dict.fromkeys(NUMERIC_COLUMNS_LEAN + [DEFAULT_TARGET_COLUMN, target_column, "target_value"]))
-    for col in numeric_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df[
+        df["split_name"] == PRED_SPLIT_ENV
+    ].copy()
 
-    # Require only weather columns to be non-null
-    weather_ok = df[WEATHER_REQUIRED_COLUMNS].notna().all(axis=1)
+    for column in CATEGORICAL_COLUMNS:
+        if column in df.columns:
+            df[column] = (
+                df[column].astype("string")
+            )
+
+    numeric_columns = list(
+        dict.fromkeys(
+            NUMERIC_COLUMNS_LEAN
+            + [
+                DEFAULT_TARGET_COLUMN,
+                target_column,
+                "target_value",
+            ]
+        )
+    )
+
+    for column in numeric_columns:
+        if column in df.columns:
+            df[column] = pd.to_numeric(
+                df[column],
+                errors="coerce",
+            )
+
+    weather_ok = (
+        df[WEATHER_REQUIRED_COLUMNS]
+        .notna()
+        .all(axis=1)
+    )
+
     df = df.loc[weather_ok].copy()
 
     latest_rows = (
-        df.groupby(["split_name", "station_name"], dropna=False)["timestamp_utc"]
+        df.groupby(
+            [
+                "split_name",
+                "station_name",
+            ],
+            dropna=False,
+        )["timestamp_utc"]
         .max()
         .rename("latest_timestamp_utc")
         .reset_index()
@@ -177,59 +382,161 @@ def prepare_inference_frame(horizon_hours: int, training_summary: dict) -> tuple
 
     latest_df = df.merge(
         latest_rows,
-        on=["split_name", "station_name"],
+        on=[
+            "split_name",
+            "station_name",
+        ],
         how="inner",
         validate="many_to_one",
     )
-    latest_df = latest_df[latest_df["timestamp_utc"] == latest_df["latest_timestamp_utc"]].copy()
-    latest_df = latest_df.sort_values(["split_name", "station_name", "timestamp_utc"]).reset_index(drop=True)
 
-    feature_columns = resolve_feature_columns(training_summary, latest_df)
-    missing_trained = [c for c in (training_summary.get("feature_columns_used") or []) if c not in latest_df.columns]
+    latest_df = latest_df[
+        latest_df["timestamp_utc"]
+        == latest_df["latest_timestamp_utc"]
+    ].copy()
+
+    latest_df = (
+        latest_df
+        .sort_values(
+            [
+                "split_name",
+                "station_name",
+                "timestamp_utc",
+            ]
+        )
+        .reset_index(drop=True)
+    )
+
+    feature_columns = resolve_feature_columns(
+        training_summary,
+        latest_df,
+    )
+
+    missing_trained = [
+        column
+        for column in (
+            training_summary.get(
+                "feature_columns_used"
+            )
+            or []
+        )
+        if column not in latest_df.columns
+    ]
+
     if missing_trained:
-        raise ValueError(f"Inference data is missing trained feature columns: {missing_trained}")
+        raise ValueError(
+            "Inference data is missing trained "
+            f"feature columns: {missing_trained}"
+        )
+
     if not feature_columns:
-        raise ValueError("No usable feature columns available for inference.")
+        raise ValueError(
+            "No usable feature columns "
+            "available for inference."
+        )
 
-    latest_df["timestamp_utc"] = pd.to_datetime(
-    latest_df["timestamp_utc"],
-    utc=True,
-    errors="coerce",
-)
-
-    latest_df["timestamp_utc"] = pd.to_datetime(
-        latest_df["timestamp_utc"],
-        utc=True,
-        errors="coerce",
+    latest_df = normalize_timestamp_columns(
+        latest_df
     )
 
     latest_df["forecast_timestamp_utc"] = (
         latest_df["timestamp_utc"]
-        + pd.to_timedelta(horizon_hours, unit="h")
+        + pd.to_timedelta(
+            horizon_hours,
+            unit="h",
+        )
     )
 
-    latest_df["prediction_ready_utc"] = pd.Timestamp.now(tz="UTC")
-    return latest_df, target_column, feature_columns
+    latest_df["prediction_ready_utc"] = (
+        pd.Timestamp.now(tz="UTC")
+    )
+
+    latest_df = normalize_timestamp_columns(
+        latest_df
+    )
+
+    return (
+        latest_df,
+        target_column,
+        feature_columns,
+    )
 
 
-def validate_inference_frame(df: pd.DataFrame, feature_columns: list[str]) -> None:
-    missing = [c for c in ["timestamp_utc", "target_value", "split_name"] if c not in df.columns]
+def validate_inference_frame(
+    df: pd.DataFrame,
+    feature_columns: list[str],
+) -> None:
+    required = [
+        "timestamp_utc",
+        "target_value",
+        "split_name",
+    ]
+
+    missing = [
+        column
+        for column in required
+        if column not in df.columns
+    ]
+
     if missing:
-        raise ValueError(f"Missing required inference columns: {missing}")
+        raise ValueError(
+            f"Missing required inference "
+            f"columns: {missing}"
+        )
 
     if df.empty:
-        raise ValueError("Inference frame is empty")
+        raise ValueError(
+            "Inference frame is empty."
+        )
+
+    if "station_name" not in df.columns:
+        raise ValueError(
+            "Inference frame is missing "
+            "station_name."
+        )
 
     if df["station_name"].isna().all():
-        raise ValueError("All station_name values are null")
+        raise ValueError(
+            "All station_name values are null."
+        )
 
-    duplicates = df.duplicated(subset=["split_name", "station_name"], keep=False)
+    duplicates = df.duplicated(
+        subset=[
+            "split_name",
+            "station_name",
+        ],
+        keep=False,
+    )
+
     if duplicates.any():
-        dupes = df.loc[duplicates, ["split_name", "station_name", "timestamp_utc"]].sort_values(["split_name", "station_name"])
-        raise ValueError(f"Expected one latest row per split/station, found duplicates:\n{dupes.head(20)}")
+        duplicate_rows = (
+            df.loc[
+                duplicates,
+                [
+                    "split_name",
+                    "station_name",
+                    "timestamp_utc",
+                ],
+            ]
+            .sort_values(
+                [
+                    "split_name",
+                    "station_name",
+                ]
+            )
+        )
+
+        raise ValueError(
+            "Expected one latest row per "
+            "split/station, found duplicates:\n"
+            f"{duplicate_rows.head(20)}"
+        )
 
     if not feature_columns:
-        raise ValueError("No feature columns resolved for inference.")
+        raise ValueError(
+            "No feature columns resolved "
+            "for inference."
+        )
 
 
 def score_frame(
@@ -242,8 +549,12 @@ def score_frame(
     feature_columns: list[str],
 ) -> pd.DataFrame:
     result = df.copy()
-    X = result[feature_columns].copy()
 
+    result = normalize_timestamp_columns(
+        result
+    )
+
+    X = result[feature_columns].copy()
     pred_raw = model.predict(X)
 
     if target_mode == "delta":
@@ -252,19 +563,23 @@ def score_frame(
             errors="coerce",
         ).to_numpy()
 
-        result["prediction"] = pred_raw + y_now
+        result["prediction"] = (
+            pred_raw + y_now
+        )
 
     elif target_mode == "level":
         result["prediction"] = pred_raw
 
     else:
         raise ValueError(
-            f"Unsupported target_mode={target_mode!r}"
+            f"Unsupported target_mode="
+            f"{target_mode!r}"
         )
 
     pipeline_run_id = os.getenv(
-        "MLOPS_RUN_ID"
-    )
+        "MLOPS_RUN_ID",
+        "",
+    ).strip()
 
     if not pipeline_run_id:
         pipeline_run_id = make_run_id(
@@ -272,7 +587,10 @@ def score_frame(
             PRED_SPLIT_ENV,
         )
 
-    result["model_version"] = model_version
+    result["model_version"] = (
+        model_version
+    )
+
     result["run_id"] = pipeline_run_id
     result["target_column"] = target_column
     result["target_mode"] = target_mode
@@ -281,18 +599,33 @@ def score_frame(
     )
 
     if PRED_SPLIT_ENV == "production":
-        result["actual_if_available"] = pd.NA
-        result["actual_available_now"] = False
+        result["actual_if_available"] = (
+            None
+        )
+
+        result["actual_available_now"] = (
+            False
+        )
+
     elif target_column in result.columns:
-        result["actual_if_available"] = result[target_column]
+        result["actual_if_available"] = (
+            result[target_column]
+        )
+
         result["actual_available_now"] = (
             result[target_column].notna()
         )
-    else:
-        result["actual_if_available"] = pd.NA
-        result["actual_available_now"] = False
 
-    output_cols = [
+    else:
+        result["actual_if_available"] = (
+            None
+        )
+
+        result["actual_available_now"] = (
+            False
+        )
+
+    output_columns = [
         "run_id",
         "model_version",
         "split_name",
@@ -311,31 +644,22 @@ def score_frame(
         "target_column",
     ] + feature_columns
 
-    output_cols = [
-        column
-        for column in output_cols
-        if column in result.columns
-    ]
-
-    output_cols = list(
-        dict.fromkeys(output_cols)
+    output_columns = list(
+        dict.fromkeys(
+            column
+            for column in output_columns
+            if column in result.columns
+        )
     )
 
-    timestamp_columns = [
-        "timestamp_utc",
-        "forecast_timestamp_utc",
-        "prediction_ready_utc",
-    ]
+    result = result[output_columns].copy()
 
-    for column in timestamp_columns:
-        if column in result.columns:
-            result[column] = pd.to_datetime(
-                result[column],
-                utc=True,
-                errors="coerce",
-            )
+    result = normalize_timestamp_columns(
+        result
+    )
+
     return (
-        result[output_cols]
+        result
         .sort_values(
             [
                 "split_name",
@@ -346,37 +670,225 @@ def score_frame(
         .reset_index(drop=True)
     )
 
-def build_summary(pred_df: pd.DataFrame, training_summary: dict, feature_columns: list[str]) -> dict:
+
+def _timestamp_schema() -> list[
+    bigquery.SchemaField
+]:
+    return [
+        bigquery.SchemaField(
+            "timestamp_utc",
+            "TIMESTAMP",
+            mode="REQUIRED",
+        ),
+        bigquery.SchemaField(
+            "forecast_timestamp_utc",
+            "TIMESTAMP",
+            mode="REQUIRED",
+        ),
+        bigquery.SchemaField(
+            "prediction_ready_utc",
+            "TIMESTAMP",
+            mode="REQUIRED",
+        ),
+    ]
+
+
+def write_predictions_to_bigquery(
+    pred_df: pd.DataFrame,
+) -> None:
+    table_name = prediction_table_name()
+
+    table_id = (
+        f"{PROJECT_ID}."
+        f"rhein_curated."
+        f"{table_name}"
+    )
+
+    frame = pred_df.copy()
+    frame = normalize_timestamp_columns(
+        frame
+    )
+
+    client = bigquery.Client(
+        project=PROJECT_ID,
+        location=GCP_REGION,
+    )
+
+    try:
+        existing_table = client.get_table(
+            table_id
+        )
+
+        existing_fields = {
+            field.name: field.field_type
+            for field in existing_table.schema
+        }
+
+        timestamp_schema_is_valid = all(
+            existing_fields.get(column)
+            == "TIMESTAMP"
+            for column in TIMESTAMP_COLUMNS
+        )
+
+        if not timestamp_schema_is_valid:
+            client.delete_table(
+                table_id,
+                not_found_ok=True,
+            )
+
+    except Exception as exc:
+        if "Not found" not in str(exc):
+            raise
+
+    load_config = (
+        bigquery.LoadJobConfig(
+            schema=_timestamp_schema(),
+            write_disposition=(
+                bigquery.WriteDisposition
+                .WRITE_TRUNCATE
+            ),
+        )
+    )
+
+    job = client.load_table_from_dataframe(
+        frame,
+        table_id,
+        job_config=load_config,
+    )
+
+    job.result()
+
+    loaded_table = client.get_table(
+        table_id
+    )
+
+    loaded_schema = {
+        field.name: field.field_type
+        for field in loaded_table.schema
+    }
+
+    for column in TIMESTAMP_COLUMNS:
+        if loaded_schema.get(column) != "TIMESTAMP":
+            raise RuntimeError(
+                f"BigQuery column {column!r} "
+                "was not created as TIMESTAMP."
+            )
+
+
+def build_summary(
+    pred_df: pd.DataFrame,
+    training_summary: dict,
+    feature_columns: list[str],
+) -> dict:
     return {
-        "predicted_at_utc": datetime.now(timezone.utc).isoformat(),
-        "run_id": pred_df["run_id"].iloc[0] if len(pred_df) else None,
-        "model_version": pred_df["model_version"].iloc[0] if len(pred_df) else None,
-        "target_column": training_summary.get("target_column"),
-        "target_mode": training_summary.get("target_mode"),
-        "horizon_hours": training_summary.get("horizon_hours"),
-        "training_rows": training_summary.get("rows_trained"),
-        "training_train_end_utc": training_summary.get("train_end_utc"),
-        "feature_columns_used_for_inference": feature_columns,
-        "rows_predicted": int(len(pred_df)),
-        "stations_predicted": int(pred_df["station_name"].nunique()) if len(pred_df) else 0,
-        "split_present": pred_df["split_name"].iloc[0] if len(pred_df) else None,
+        "predicted_at_utc": (
+            datetime.now(
+                timezone.utc
+            ).isoformat()
+        ),
+        "run_id": (
+            pred_df["run_id"].iloc[0]
+            if len(pred_df)
+            else None
+        ),
+        "model_version": (
+            pred_df["model_version"].iloc[0]
+            if len(pred_df)
+            else None
+        ),
+        "target_column": (
+            training_summary.get(
+                "target_column"
+            )
+        ),
+        "target_mode": (
+            training_summary.get(
+                "target_mode"
+            )
+        ),
+        "horizon_hours": (
+            training_summary.get(
+                "horizon_hours"
+            )
+        ),
+        "training_rows": (
+            training_summary.get(
+                "rows_trained"
+            )
+        ),
+        "training_train_end_utc": (
+            training_summary.get(
+                "train_end_utc"
+            )
+        ),
+        "feature_columns_used_for_inference": (
+            feature_columns
+        ),
+        "rows_predicted": int(
+            len(pred_df)
+        ),
+        "stations_predicted": int(
+            pred_df["station_name"].nunique()
+        )
+        if len(pred_df)
+        else 0,
+        "split_present": (
+            pred_df["split_name"].iloc[0]
+            if len(pred_df)
+            else None
+        ),
         "source_table": TRAIN_TABLE_NAME,
         "prediction_table": (
-            PREDICTIONS_TABLE_BASE
-            if PRED_SPLIT_ENV == "production"
-            else f"{PREDICTIONS_TABLE_BASE}_{PRED_SPLIT_ENV}"
+            prediction_table_name()
         ),
-        "min_forecast_timestamp_utc": pred_df["forecast_timestamp_utc"].min().isoformat() if len(pred_df) else None,
-        "max_forecast_timestamp_utc": pred_df["forecast_timestamp_utc"].max().isoformat() if len(pred_df) else None,
+        "min_forecast_timestamp_utc": (
+            pred_df[
+                "forecast_timestamp_utc"
+            ]
+            .min()
+            .isoformat()
+            if len(pred_df)
+            else None
+        ),
+        "max_forecast_timestamp_utc": (
+            pred_df[
+                "forecast_timestamp_utc"
+            ]
+            .max()
+            .isoformat()
+            if len(pred_df)
+            else None
+        ),
     }
 
 
 def main():
-    training_summary, model, model_version = load_production_artifacts()
-    target_mode = training_summary.get("target_mode", "level")
+    (
+        training_summary,
+        model,
+        model_version,
+    ) = load_production_artifacts()
+
+    target_mode = training_summary.get(
+        "target_mode",
+        "level",
+    )
+
     horizon_hours = HORIZON_HOURS
-    inference_df, target_column, feature_columns = prepare_inference_frame(horizon_hours, training_summary)
-    validate_inference_frame(inference_df, feature_columns)
+
+    (
+        inference_df,
+        target_column,
+        feature_columns,
+    ) = prepare_inference_frame(
+        horizon_hours,
+        training_summary,
+    )
+
+    validate_inference_frame(
+        inference_df,
+        feature_columns,
+    )
 
     pred_df = score_frame(
         inference_df,
@@ -388,34 +900,91 @@ def main():
         feature_columns=feature_columns,
     )
 
-    pred_df.to_csv(PREDICTIONS_CSV, index=False)
-    if PRED_SPLIT_ENV == "production":
-        table_name = PREDICTIONS_TABLE_BASE
-    else:
-        table_name = (f"{PREDICTIONS_TABLE_BASE}_{PRED_SPLIT_ENV}")
-    write_bigquery_table(pred_df, table_name, dataset="rhein_curated", if_exists="replace")
+    pred_df = normalize_timestamp_columns(
+        pred_df
+    )
 
-    summary = build_summary(pred_df, training_summary, feature_columns)
-    with open(PREDICTIONS_SUMMARY_JSON, "w", encoding="utf-8") as f:
-        json.dump(summary, f, indent=2)
+    pred_df.to_csv(
+        PREDICTIONS_CSV,
+        index=False,
+        date_format="%Y-%m-%dT%H:%M:%S.%fZ",
+    )
 
-    preview_cols = [
+    write_predictions_to_bigquery(
+        pred_df
+    )
+
+    summary = build_summary(
+        pred_df,
+        training_summary,
+        feature_columns,
+    )
+
+    with open(
+        PREDICTIONS_SUMMARY_JSON,
+        "w",
+        encoding="utf-8",
+    ) as handle:
+        json.dump(
+            summary,
+            handle,
+            indent=2,
+        )
+
+    preview_columns = [
         "split_name",
         "station_name",
         "timestamp_utc",
         "forecast_timestamp_utc",
+        "prediction_ready_utc",
         "prediction",
+        "actual_if_available",
+        "actual_available_now",
         "model_version",
         "run_id",
     ]
-    preview_cols = [c for c in preview_cols if c in pred_df.columns]
 
-    print(pred_df[preview_cols].head(30).to_string(index=False))
+    preview_columns = [
+        column
+        for column in preview_columns
+        if column in pred_df.columns
+    ]
+
+    print(
+        pred_df[preview_columns]
+        .head(30)
+        .to_string(index=False)
+    )
+
+    print("\nTimestamp dtypes:")
+    print(
+        pred_df[
+            TIMESTAMP_COLUMNS
+        ].dtypes
+    )
+
     print("\nSummary:")
-    print(json.dumps(summary, indent=2))
-    print(f"\nWrote: {PREDICTIONS_CSV}")
-    print(f"Wrote BigQuery table: rhein_curated.{table_name}")
-    print(f"Wrote: {PREDICTIONS_SUMMARY_JSON}")
+    print(
+        json.dumps(
+            summary,
+            indent=2,
+        )
+    )
+
+    print(
+        f"\nWrote: {PREDICTIONS_CSV}"
+    )
+
+    print(
+        "Wrote BigQuery table: "
+        f"rhein_curated."
+        f"{prediction_table_name()}"
+    )
+
+    print(
+        f"Wrote: {PREDICTIONS_SUMMARY_JSON}"
+    )
+
     return summary
 
 
