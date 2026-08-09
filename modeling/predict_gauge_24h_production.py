@@ -191,7 +191,23 @@ def prepare_inference_frame(horizon_hours: int, training_summary: dict) -> tuple
     if not feature_columns:
         raise ValueError("No usable feature columns available for inference.")
 
-    latest_df["forecast_timestamp_utc"] = latest_df["timestamp_utc"] + pd.to_timedelta(horizon_hours, unit="h")
+    latest_df["timestamp_utc"] = pd.to_datetime(
+    latest_df["timestamp_utc"],
+    utc=True,
+    errors="coerce",
+)
+
+    latest_df["timestamp_utc"] = pd.to_datetime(
+        latest_df["timestamp_utc"],
+        utc=True,
+        errors="coerce",
+    )
+
+    latest_df["forecast_timestamp_utc"] = (
+        latest_df["timestamp_utc"]
+        + pd.to_timedelta(horizon_hours, unit="h")
+    )
+
     latest_df["prediction_ready_utc"] = pd.Timestamp.now(tz="UTC")
     return latest_df, target_column, feature_columns
 
@@ -305,6 +321,19 @@ def score_frame(
         dict.fromkeys(output_cols)
     )
 
+    timestamp_columns = [
+        "timestamp_utc",
+        "forecast_timestamp_utc",
+        "prediction_ready_utc",
+    ]
+
+    for column in timestamp_columns:
+        if column in result.columns:
+            result[column] = pd.to_datetime(
+                result[column],
+                utc=True,
+                errors="coerce",
+            )
     return (
         result[output_cols]
         .sort_values(
