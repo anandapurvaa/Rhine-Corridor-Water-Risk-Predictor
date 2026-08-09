@@ -58,10 +58,16 @@ TRAIN_TABLE = (
     "dataset_splits_gauge_24h"
 )
 
-PREDICTION_TABLE = (
-    f"{PROJECT_ID}.rhein_curated."
-    "gauge_24h_production_predictions_test"
-)
+if PRED_SPLIT == "production":
+    PREDICTION_TABLE = (
+        f"{PROJECT_ID}.rhein_curated."
+        "gauge_24h_production_predictions"
+    )
+else:
+    PREDICTION_TABLE = (
+        f"{PROJECT_ID}.rhein_curated."
+        f"gauge_24h_production_predictions_{PRED_SPLIT}"
+    )
 
 
 def utc_now() -> datetime:
