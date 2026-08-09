@@ -323,15 +323,12 @@ def score_frame(
 
     for column in timestamp_columns:
         if column in result.columns:
-            # Fix BigQuery INT64 serialization bug for timedelta-generated columns:
-            # We explicitly cast to string and back to datetime to completely strip
-            # residual pyarrow array metadata without losing precision or nulls.
+            # Cast the final outputs to explicit strings to prevent PyArrow
+            # from serializing datetime64[ns] as INT64 nanoseconds in BigQuery
             result[column] = pd.to_datetime(
-                result[column].astype(str),
-                utc=True,
-                errors="coerce",
-            )
-            
+                result[column], utc=True, errors="coerce"
+            ).dt.strftime('%Y-%m-%d %H:%M:%S.%f UTC')
+
     return (
         result[output_cols]
         .sort_values(
@@ -346,7 +343,13 @@ def score_frame(
 
 def build_summary(pred_df: pd.DataFrame, training_summary: dict, feature_columns: list[str]) -> dict:
     
-    valid_forecasts = pred_df["forecast_timestamp_utc"].dropna() if "forecast_timestamp_utc" in pred_df.columns else pd.Series(dtype=object)
+    if "forecast_timestamp_utc" in pred_df.columns:
+        # Convert the formatted strings back to datetimes just to accurately calculate min/max
+        valid_forecasts = pd.to_datetime(
+            pred_df["forecast_timestamp_utc"], utc=True, errors="coerce"
+        ).dropna()
+    else:
+        valid_forecasts = pd.Series(dtype='datetime64[ns, UTC]')
     
     return {
         "predicted_at_utc": datetime.now(timezone.utc).isoformat(),
