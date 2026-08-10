@@ -80,29 +80,19 @@ DATASET_SPLITS_TABLE = os.getenv(
     "dataset_splits_gauge_24h",
 ).strip()
 
+THRESHOLD_CONFIG_PATH = Path(
+    os.getenv(
+        "GAUGE24H_THRESHOLD_CONFIG_PATH",
+        "config/threshold.yaml",
+    ).strip()
+)
+
 ACTUAL_MATCH_TOLERANCE_MINUTES = int(
     os.getenv(
         "GAUGE24H_ACTUAL_MATCH_TOLERANCE_MINUTES",
         "30",
     )
 )
-
-THRESHOLD_BY_STATION = {
-    "KAUB": 120.0,
-    "MAXAU": 380.0,
-    "KOBLENZ": 150.0,
-    "DUISBURG-RUHRORT": 260.0,
-    "EMMERICH": 140.0,
-    "KÖLN": 180.0,
-    "KLN": 180.0,
-    "MAINZ": 170.0,
-    "WORMS": 120.0,
-    "SPEYER": 200.0,
-    "BONN": 170.0,
-    "DÜSSELDORF": 190.0,
-    "DUSSELDORF": 190.0,
-    "REES": 160.0,
-}
 
 EVAL_SPLIT_NAME = os.getenv(
     "GAUGE24H_EVAL_SPLIT_NAME",
@@ -125,6 +115,48 @@ elif EVAL_SPLIT_NAME == "test":
     PREDICTIONS_TABLE = PREDICTIONS_TEST_TABLE
 else:
     PREDICTIONS_TABLE = PREDICTIONS_VALIDATION_TABLE
+
+
+def load_thresholds() -> dict[str, float]:
+    if not THRESHOLD_CONFIG_PATH.exists():
+        raise FileNotFoundError(
+            f"Threshold config not found: {THRESHOLD_CONFIG_PATH}"
+        )
+
+    try:
+        import yaml
+    except ImportError as exc:
+        raise ImportError(
+            "PyYAML is required to load config/threshold.yaml"
+        ) from exc
+
+    with open(THRESHOLD_CONFIG_PATH, "r", encoding="utf-8") as handle:
+        data = yaml.safe_load(handle) or {}
+
+    thresholds = data.get("low_water_thresholds_cm", data)
+    if not isinstance(thresholds, dict):
+        raise ValueError(
+            "Threshold config must contain a mapping under "
+            "'low_water_thresholds_cm'."
+        )
+
+    normalized: dict[str, float] = {}
+    for station, value in thresholds.items():
+        if value is None:
+            continue
+        normalized[str(station).strip().upper()] = float(value)
+
+    if not normalized:
+        raise ValueError("No thresholds found in threshold config.")
+
+    return normalized
+
+
+THRESHOLD_BY_STATION = load_thresholds()
+
+
+def normalize_station_name(name: str) -> str:
+    return str(name).strip().upper()
 
 
 def load_predictions() -> pd.DataFrame:
@@ -637,7 +669,6 @@ def build_not_ready_summary(
                 hours=horizon_hours
             )
         )
-
         time_until_ready = (
             evaluation_available_at
             - now_utc
@@ -674,15 +705,15 @@ def build_not_ready_summary(
             f"{evaluation_available_at.isoformat()}."
         )
 
-        if (
-            human_wait is not None
-            and wait_seconds
-            and wait_seconds > 0
-        ):
-            message += (
-                f" Time remaining: "
-                f"{human_wait}."
-            )
+    if (
+        human_wait is not None
+        and wait_seconds
+        and wait_seconds > 0
+    ):
+        message += (
+            f" Time remaining: "
+            f"{human_wait}."
+        )
 
     return {
         "evaluated_at_utc": (
@@ -911,6 +942,7 @@ def prepare_evaluation_frame(
         np.nan,
     )
 
+    merged["station_name"] = merged["station_name"].map(normalize_station_name)
     merged["threshold"] = (
         merged["station_name"]
         .map(THRESHOLD_BY_STATION)
@@ -1350,6 +1382,8 @@ def build_summary(
         "evaluation_key_columns": (
             EVALUATION_KEY_COLUMNS
         ),
+        "threshold_config_path": str(THRESHOLD_CONFIG_PATH),
+        "stations_with_thresholds": sorted(THRESHOLD_BY_STATION.keys()),
     }
 
 
