@@ -83,7 +83,7 @@ DATASET_SPLITS_TABLE = os.getenv(
 THRESHOLD_CONFIG_PATH = Path(
     os.getenv(
         "GAUGE24H_THRESHOLD_CONFIG_PATH",
-        "config/threshold.yaml",
+        "config/thresholds.yaml",
     ).strip()
 )
 
