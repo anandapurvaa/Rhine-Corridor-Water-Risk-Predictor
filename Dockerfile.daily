@@ -20,7 +20,7 @@ COPY sql/ ./sql/
 ENV PYTHONPATH=/app
 ENV GCP_PROJECT_ID=rhine-corridor-navigator
 ENV GCP_REGION=europe-west3
-ENV GAUGE24H_PRED_SPLIT=test
+ENV GAUGE24H_PRED_SPLIT=production
 ENV GAUGE24H_HORIZON_HOURS=24
 
 RUN test -f /app/config/rhine_gauges.yaml
