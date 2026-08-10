@@ -13,3 +13,5 @@ SELECT
   source_record_hash,
   source_url
 FROM `rhine-corridor-navigator.rhein_raw.v_pegelonline_measurements_dedup`;
+WHERE value IS NOT NULL
+  AND value BETWEEN -1000 AND 2000;
