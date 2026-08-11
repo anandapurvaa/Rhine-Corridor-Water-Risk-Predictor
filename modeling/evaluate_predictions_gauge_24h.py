@@ -116,6 +116,14 @@ elif EVAL_SPLIT_NAME == "test":
 else:
     PREDICTIONS_TABLE = PREDICTIONS_VALIDATION_TABLE
 
+def normalize_utc_timestamp_dtype(
+    series: pd.Series,
+) -> pd.Series:
+    return pd.to_datetime(
+        series,
+        utc=True,
+        errors="coerce",
+    ).astype("datetime64[ns, UTC]")
 
 def load_thresholds() -> dict[str, float]:
     if not THRESHOLD_CONFIG_PATH.exists():
@@ -492,6 +500,44 @@ def resolve_production_actual_values(
     predictions = pred_df.copy()
     actuals = actual_df.copy()
 
+    predictions["forecast_timestamp_utc"] = (
+        pd.to_datetime(
+            predictions["forecast_timestamp_utc"],
+            utc=True,
+            errors="coerce",
+        ).astype("datetime64[ns, UTC]")
+    )
+
+    actuals["timestamp_utc"] = (
+        pd.to_datetime(
+            actuals["timestamp_utc"],
+            utc=True,
+            errors="coerce",
+        ).astype("datetime64[ns, UTC]")
+    )
+
+    actuals = actuals.rename(
+        columns={
+            "value": "actual_value",
+            "timestamp_utc": "actual_timestamp_utc",
+        }
+    )
+
+    predictions = predictions.dropna(
+        subset=[
+            "station_name",
+            "forecast_timestamp_utc",
+        ]
+    ).copy()
+
+    actuals = actuals.dropna(
+        subset=[
+            "station_name",
+            "actual_timestamp_utc",
+            "actual_value",
+        ]
+    ).copy()
+
     predictions = predictions.sort_values(
         [
             "station_name",
@@ -502,7 +548,7 @@ def resolve_production_actual_values(
     actuals = actuals.sort_values(
         [
             "station_name",
-            "timestamp_utc",
+            "actual_timestamp_utc",
         ]
     )
 
@@ -515,8 +561,7 @@ def resolve_production_actual_values(
         )
     ):
         station_actuals = actuals[
-            actuals["station_name"]
-            == station_name
+            actuals["station_name"] == station_name
         ].copy()
 
         if station_actuals.empty:
@@ -526,28 +571,26 @@ def resolve_production_actual_values(
             matched_groups.append(group)
             continue
 
-        station_actuals = station_actuals.rename(
-            columns={
-                "timestamp_utc": (
-                    "actual_timestamp_utc"
-                )
-            }
+        station_predictions = (
+            station_predictions
+            .sort_values("forecast_timestamp_utc")
+            .reset_index(drop=True)
+        )
+
+        station_actuals = (
+            station_actuals
+            .sort_values("actual_timestamp_utc")
+            .reset_index(drop=True)
         )
 
         group = pd.merge_asof(
-            station_predictions.sort_values(
-                "forecast_timestamp_utc"
-            ),
-            station_actuals.sort_values(
-                "actual_timestamp_utc"
-            ),
+            station_predictions,
+            station_actuals,
             left_on="forecast_timestamp_utc",
             right_on="actual_timestamp_utc",
             direction="nearest",
             tolerance=pd.Timedelta(
-                minutes=(
-                    ACTUAL_MATCH_TOLERANCE_MINUTES
-                )
+                minutes=ACTUAL_MATCH_TOLERANCE_MINUTES
             ),
             suffixes=(
                 "",

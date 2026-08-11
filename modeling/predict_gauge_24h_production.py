@@ -234,7 +234,11 @@ def score_frame(
     output_cols = [column for column in output_cols if column in result.columns]
 
     for column in ["timestamp_utc", "forecast_timestamp_utc", "prediction_ready_utc"]:
-        result[column] = pd.to_datetime(result[column], utc=True, errors="coerce")
+        if column in result.columns:
+            # Explicitly cast to BigQuery-compliant strings to prevent PyArrow INT64 bugs
+            result[column] = pd.to_datetime(
+                result[column], utc=True, errors="coerce"
+            ).dt.strftime('%Y-%m-%d %H:%M:%S.%f UTC')
 
     return result[output_cols].sort_values(
         ["split_name", "station_name", "timestamp_utc"]
