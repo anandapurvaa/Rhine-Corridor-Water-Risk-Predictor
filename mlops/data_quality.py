@@ -197,7 +197,10 @@ def check_training_input(
     latest_timestamp = row.get(
         "latest_timestamp_utc"
     )
-
+    if isinstance(latest_timestamp, str):
+        import pandas as pd
+        latest_timestamp = pd.to_datetime(latest_timestamp, utc=True)
+        
     if latest_timestamp is not None:
         if latest_timestamp.tzinfo is None:
             latest_timestamp = latest_timestamp.replace(
