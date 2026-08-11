@@ -4,9 +4,11 @@ import os
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import yaml
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from google.cloud import bigquery
@@ -28,6 +30,9 @@ EVALUATIONS_TABLE = os.getenv(
     "EVALUATIONS_TABLE", "gauge_24h_prediction_evaluations"
 ).strip()
 STATIONS_TABLE = os.getenv("STATIONS_TABLE", "dim_station").strip()
+SEGMENTS_CONFIG_PATH = Path(
+    os.getenv("GAUGE24H_SEGMENTS_CONFIG_PATH", "config/segments.yaml").strip()
+)
 CACHE_TTL_SECONDS = int(os.getenv("API_CACHE_TTL_SECONDS", "300"))
 ALLOWED_ORIGINS = [
     origin.strip()
@@ -37,7 +42,7 @@ ALLOWED_ORIGINS = [
 
 app = FastAPI(
     title="Rhine Corridor Gauge 24h Prediction API",
-    version="1.0.0",
+    version="1.1.0",
 )
 app.add_middleware(
     CORSMiddleware,
@@ -50,6 +55,8 @@ app.add_middleware(
 _bq_client: bigquery.Client | None = None
 _cache: dict[str, tuple[float, Any]] = {}
 _cache_lock = threading.Lock()
+_segments_cache: dict[str, Any] | None = None
+_segments_cache_mtime: float | None = None
 
 
 def get_bq_client() -> bigquery.Client:
@@ -110,6 +117,7 @@ def clean_records(df: pd.DataFrame) -> list[dict[str, Any]]:
         "prediction_timestamp_utc",
         "actual_available_utc",
         "evaluated_at_utc",
+        "measured_at_utc",
     ]
     for column in timestamp_columns:
         if column in result.columns:
@@ -118,10 +126,12 @@ def clean_records(df: pd.DataFrame) -> list[dict[str, Any]]:
     result = result.where(pd.notna(result), None)
     cleaned: list[dict[str, Any]] = []
     for record in result.to_dict(orient="records"):
-        cleaned.append({
-            key: value.item() if hasattr(value, "item") else value
-            for key, value in record.items()
-        })
+        cleaned.append(
+            {
+                key: value.item() if hasattr(value, "item") else value
+                for key, value in record.items()
+            }
+        )
     return cleaned
 
 
@@ -157,6 +167,95 @@ def latest_prediction_run_id() -> str:
     return str(df.iloc[0]["run_id"])
 
 
+def load_segments_config() -> dict[str, Any]:
+    global _segments_cache, _segments_cache_mtime
+    if not SEGMENTS_CONFIG_PATH.exists():
+        return {"segments": {}}
+
+    mtime = SEGMENTS_CONFIG_PATH.stat().st_mtime
+    if _segments_cache is not None and _segments_cache_mtime == mtime:
+        return _segments_cache
+
+    with SEGMENTS_CONFIG_PATH.open("r", encoding="utf-8") as handle:
+        data = yaml.safe_load(handle) or {}
+
+    segments = data.get("segments", {})
+    if not isinstance(segments, dict):
+        segments = {}
+
+    normalized: dict[str, Any] = {"segments": {}}
+    for segment_id, segment in segments.items():
+        if not isinstance(segment, dict):
+            continue
+        support_gauges = segment.get("support_gauges", []) or []
+        normalized["segments"][str(segment_id)] = {
+            "segment_id": str(segment_id),
+            "label": str(segment.get("label", segment_id)),
+            "decision_gauge": str(segment.get("decision_gauge", "")).strip(),
+            "support_gauges": [str(g).strip() for g in support_gauges if str(g).strip()],
+        }
+
+    _segments_cache = normalized
+    _segments_cache_mtime = mtime
+    return normalized
+
+
+def normalize_station_name(name: str) -> str:
+    return str(name).strip().upper().replace(" ", "-")
+
+
+def build_station_segment_lookup() -> dict[str, list[dict[str, Any]]]:
+    segments = load_segments_config().get("segments", {})
+    lookup: dict[str, list[dict[str, Any]]] = {}
+    for segment_id, segment in segments.items():
+        decision_gauge = normalize_station_name(segment.get("decision_gauge", ""))
+        label = segment.get("label", segment_id)
+        gauges = set(
+            normalize_station_name(g)
+            for g in segment.get("support_gauges", [])
+            if g
+        )
+        if decision_gauge:
+            gauges.add(decision_gauge)
+        for gauge in gauges:
+            lookup.setdefault(gauge, []).append(
+                {
+                    "segment_id": segment_id,
+                    "segment_label": label,
+                    "decision_gauge": decision_gauge,
+                    "is_decision_gauge": gauge == decision_gauge,
+                }
+            )
+    return lookup
+
+
+def attach_segment_metadata(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or "station_name" not in df.columns:
+        return df
+
+    lookup = build_station_segment_lookup()
+    result = df.copy()
+    segment_ids = []
+    segment_labels = []
+    is_decision_gauge = []
+
+    for station in result["station_name"].astype(str).map(normalize_station_name):
+        matches = lookup.get(station, [])
+        if not matches:
+            segment_ids.append([])
+            segment_labels.append([])
+            is_decision_gauge.append(False)
+            continue
+        segment_ids.append([m["segment_id"] for m in matches])
+        segment_labels.append([m["segment_label"] for m in matches])
+        is_decision_gauge.append(any(m["is_decision_gauge"] for m in matches))
+
+    result["segment_ids"] = segment_ids
+    result["segment_labels"] = segment_labels
+    result["is_decision_gauge"] = is_decision_gauge
+    return result
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {
@@ -190,6 +289,33 @@ def readiness() -> dict[str, Any]:
     }
     if not ready:
         raise HTTPException(status_code=503, detail=payload)
+    return payload
+
+
+@app.get("/metadata/segments")
+def get_segments_metadata() -> dict[str, Any]:
+    cache_key = "metadata:segments"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    config = load_segments_config()
+    segments = []
+    for segment_id, segment in config.get("segments", {}).items():
+        segments.append(
+            {
+                "segment_id": segment_id,
+                "segment_label": segment.get("label", segment_id),
+                "decision_gauge": segment.get("decision_gauge"),
+                "support_gauges": segment.get("support_gauges", []),
+            }
+        )
+
+    payload = {
+        "segments": segments,
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    cache_set(cache_key, payload, ttl_seconds=3600)
     return payload
 
 
@@ -235,6 +361,7 @@ def get_latest_predictions() -> list[dict[str, Any]]:
             detail=f"BigQuery error: {exc}",
         ) from exc
 
+    df = attach_segment_metadata(df)
     records = clean_records(df)
     cache_set(cache_key, records)
     return records
@@ -248,14 +375,17 @@ def get_predictions_history(
         min_length=1,
         max_length=100,
     ),
+    segment: str | None = Query(
+        default=None,
+        min_length=1,
+        max_length=100,
+    ),
 ) -> list[dict[str, Any]]:
-    cache_key = f"predictions:history:{days}:{station or '*'}"
+    cache_key = f"predictions:history:{days}:{station or '*'}:{segment or '*'}"
     cached = cache_get(cache_key)
     if cached is not None:
         return cached
 
-    # History reads the append-only table. Do not restrict this query to
-    # latest_prediction_run_id(), otherwise only one daily run is returned.
     query = f"""
         SELECT
             run_id,
@@ -308,6 +438,20 @@ def get_predictions_history(
             detail=f"BigQuery error: {exc}",
         ) from exc
 
+    if segment:
+        lookup = build_station_segment_lookup()
+        allowed = set()
+        for segment_id, seg in load_segments_config().get("segments", {}).items():
+            if str(segment_id).lower() == segment.lower() or str(seg.get("label", "")).lower() == segment.lower():
+                allowed.update(
+                    normalize_station_name(g)
+                    for g in ([seg.get("decision_gauge", "")] + seg.get("support_gauges", []))
+                    if g
+                )
+        if allowed:
+            df = df[df["station_name"].astype(str).map(normalize_station_name).isin(allowed)].copy()
+
+    df = attach_segment_metadata(df)
     records = clean_records(df)
     cache_set(cache_key, records)
     return records
@@ -333,6 +477,20 @@ def get_station_metadata() -> list[dict[str, Any]]:
             status_code=500,
             detail=f"BigQuery error: {exc}",
         ) from exc
+
+    df = df.copy()
+    df["station_name_normalized"] = df["station_name"].astype(str).map(normalize_station_name)
+    lookup = build_station_segment_lookup()
+    df["segment_ids"] = df["station_name_normalized"].map(
+        lambda s: [m["segment_id"] for m in lookup.get(s, [])]
+    )
+    df["segment_labels"] = df["station_name_normalized"].map(
+        lambda s: [m["segment_label"] for m in lookup.get(s, [])]
+    )
+    df["is_decision_gauge"] = df["station_name_normalized"].map(
+        lambda s: any(m["is_decision_gauge"] for m in lookup.get(s, []))
+    )
+    df = df.drop(columns=["station_name_normalized"])
 
     records = clean_records(df)
     cache_set(cache_key, records, ttl_seconds=3600)

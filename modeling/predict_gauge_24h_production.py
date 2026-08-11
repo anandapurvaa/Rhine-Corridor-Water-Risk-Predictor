@@ -90,17 +90,19 @@ def prepare_inference_frame(
     training_summary: dict,
 ) -> tuple[pd.DataFrame, str, list[str]]:
     target_column = f"target_value_t_plus_{horizon_hours}h"
-    requested = list(dict.fromkeys(
-        PRODUCTION_FEATURE_COLUMNS
-        + [
-            DEFAULT_TARGET_COLUMN,
-            target_column,
-            "target_value",
-            "timestamp_utc",
-            "split_name",
-            "station_name",
-        ]
-    ))
+    requested = list(
+        dict.fromkeys(
+            PRODUCTION_FEATURE_COLUMNS
+            + [
+                DEFAULT_TARGET_COLUMN,
+                target_column,
+                "target_value",
+                "timestamp_utc",
+                "split_name",
+                "station_name",
+            ]
+        )
+    )
 
     df = load_bigquery_table(
         TRAIN_TABLE_NAME,
@@ -109,7 +111,11 @@ def prepare_inference_frame(
         allow_missing_columns=True,
     )
 
-    missing_required = [column for column in ROBUSTNESS_REQUIRED_COLUMNS if column not in df.columns]
+    missing_required = [
+        column
+        for column in ROBUSTNESS_REQUIRED_COLUMNS
+        if column not in df.columns
+    ]
     if missing_required:
         raise ValueError(f"Missing required inference base columns: {missing_required}")
     if "split_name" not in df.columns or "station_name" not in df.columns:
@@ -124,9 +130,9 @@ def prepare_inference_frame(
         if column in df.columns:
             df[column] = df[column].astype("string")
 
-    numeric_columns = list(dict.fromkeys(
-        NUMERIC_COLUMNS_LEAN + [DEFAULT_TARGET_COLUMN, target_column, "target_value"]
-    ))
+    numeric_columns = list(
+        dict.fromkeys(NUMERIC_COLUMNS_LEAN + [DEFAULT_TARGET_COLUMN, target_column, "target_value"])
+    )
     for column in numeric_columns:
         if column in df.columns:
             df[column] = pd.to_numeric(df[column], errors="coerce")
@@ -139,18 +145,18 @@ def prepare_inference_frame(
     if not feature_columns:
         raise ValueError("No usable feature columns available for inference")
 
-    required_complete = list(dict.fromkeys(
-        ["station_name", "timestamp_utc", "target_value"]
-        + WEATHER_REQUIRED_COLUMNS
-        + feature_columns
-    ))
+    required_complete = list(
+        dict.fromkeys(
+            ["station_name", "timestamp_utc", "target_value"]
+            + WEATHER_REQUIRED_COLUMNS
+            + feature_columns
+        )
+    )
     missing_complete_columns = [column for column in required_complete if column not in df.columns]
     if missing_complete_columns:
         raise ValueError(f"Required complete-data columns are missing: {missing_complete_columns}")
 
-    # Test predictions must contain only rows with complete DWD/Pegelonline/model data.
     df = df.dropna(subset=required_complete).copy()
-
     if df.empty:
         raise ValueError(f"No complete rows available for split '{PRED_SPLIT_ENV}'")
 
@@ -185,7 +191,6 @@ def validate_inference_frame(df: pd.DataFrame, feature_columns: list[str]) -> No
         raise ValueError("Inference frame is empty")
     if df[required].isna().any().any():
         raise ValueError("Inference frame contains null required values")
-
     if PRED_SPLIT_ENV == "production":
         duplicates = df.duplicated(subset=["split_name", "station_name"], keep=False)
         if duplicates.any():
@@ -202,17 +207,31 @@ def score_frame(
     feature_columns: list[str],
 ) -> pd.DataFrame:
     result = df.copy()
-    pred_raw = model.predict(result[feature_columns].copy())
+    pred_raw = pd.to_numeric(
+        model.predict(result[feature_columns].copy()),
+        errors="coerce",
+    )
 
+    result["prediction_delta"] = pd.NA
     if target_mode == "delta":
-        result["prediction"] = pred_raw + pd.to_numeric(result["target_value"], errors="coerce").to_numpy()
+        result["prediction_delta"] = pred_raw
+        result["prediction_level"] = pred_raw + pd.to_numeric(
+            result["target_value"], errors="coerce"
+        ).to_numpy()
     elif target_mode == "level":
-        result["prediction"] = pred_raw
+        result["prediction_level"] = pred_raw
     else:
         raise ValueError(f"Unsupported target_mode={target_mode!r}")
 
-    # Explicitly round the generated prediction to 1 decimal point
-    result["prediction"] = result["prediction"].round(1)
+    result["prediction_level"] = pd.to_numeric(
+        result["prediction_level"], errors="coerce"
+    ).round(1)
+    result["prediction"] = result["prediction_level"]
+
+    if target_mode == "delta":
+        result["prediction_delta"] = pd.to_numeric(
+            result["prediction_delta"], errors="coerce"
+        ).round(1)
 
     run_id = os.getenv("MLOPS_RUN_ID") or make_run_id(model_version, PRED_SPLIT_ENV)
     result["model_version"] = model_version
@@ -220,6 +239,7 @@ def score_frame(
     result["target_column"] = target_column
     result["target_mode"] = target_mode
     result["prediction_horizon_hours"] = horizon_hours
+    result["prediction_unit"] = result.get("unit", "cm")
 
     if PRED_SPLIT_ENV == "production":
         result["actual_if_available"] = pd.NA
@@ -228,27 +248,51 @@ def score_frame(
         result["actual_if_available"] = result[target_column]
         result["actual_available_now"] = result[target_column].notna()
 
-    output_cols = list(dict.fromkeys([
-        "run_id", "model_version", "split_name", "station_name", "timeseries_name",
-        "unit", "source", "timestamp_utc", "forecast_timestamp_utc", "prediction_ready_utc",
-        "prediction_horizon_hours", "target_mode", "prediction", "actual_if_available",
-        "actual_available_now", "target_column",
-    ] + feature_columns))
+    output_cols = list(
+        dict.fromkeys(
+            [
+                "run_id",
+                "model_version",
+                "split_name",
+                "station_name",
+                "timeseries_name",
+                "unit",
+                "prediction_unit",
+                "source",
+                "timestamp_utc",
+                "forecast_timestamp_utc",
+                "prediction_ready_utc",
+                "prediction_horizon_hours",
+                "target_mode",
+                "target_column",
+                "prediction_delta",
+                "prediction_level",
+                "prediction",
+                "actual_if_available",
+                "actual_available_now",
+            ]
+            + feature_columns
+        )
+    )
     output_cols = [column for column in output_cols if column in result.columns]
 
     for column in ["timestamp_utc", "forecast_timestamp_utc", "prediction_ready_utc"]:
         if column in result.columns:
-            # Explicitly cast to BigQuery-compliant strings without microseconds
             result[column] = pd.to_datetime(
                 result[column], utc=True, errors="coerce"
-            ).dt.strftime('%Y-%m-%d %H:%M:%S UTC')
+            ).dt.strftime("%Y-%m-%d %H:%M:%S UTC")
 
     return result[output_cols].sort_values(
         ["split_name", "station_name", "timestamp_utc"]
     ).reset_index(drop=True)
 
 
-def build_summary(pred_df: pd.DataFrame, training_summary: dict, feature_columns: list[str], current_table: str) -> dict:
+def build_summary(
+    pred_df: pd.DataFrame,
+    training_summary: dict,
+    feature_columns: list[str],
+    current_table: str,
+) -> dict:
     forecasts = pd.to_datetime(pred_df["forecast_timestamp_utc"], utc=True, errors="coerce")
     return {
         "predicted_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -257,6 +301,7 @@ def build_summary(pred_df: pd.DataFrame, training_summary: dict, feature_columns
         "target_column": training_summary.get("target_column"),
         "target_mode": training_summary.get("target_mode"),
         "horizon_hours": training_summary.get("horizon_hours"),
+        "prediction_semantics": "absolute_level_in_prediction; raw_delta_in_prediction_delta" if training_summary.get("target_mode") == "delta" else "absolute_level",
         "training_rows": training_summary.get("rows_trained"),
         "feature_columns_used_for_inference": feature_columns,
         "rows_predicted": int(len(pred_df)),
@@ -273,12 +318,20 @@ def build_summary(pred_df: pd.DataFrame, training_summary: dict, feature_columns
 def main() -> dict:
     training_summary, model, model_version = load_production_artifacts()
     target_mode = training_summary.get("target_mode", "level")
-    inference_df, target_column, feature_columns = prepare_inference_frame(HORIZON_HOURS, training_summary)
+    inference_df, target_column, feature_columns = prepare_inference_frame(
+        HORIZON_HOURS,
+        training_summary,
+    )
     validate_inference_frame(inference_df, feature_columns)
 
     pred_df = score_frame(
-        inference_df, model, model_version, target_mode,
-        HORIZON_HOURS, target_column, feature_columns,
+        inference_df,
+        model,
+        model_version,
+        target_mode,
+        HORIZON_HOURS,
+        target_column,
+        feature_columns,
     )
 
     current_table = (
@@ -287,7 +340,12 @@ def main() -> dict:
         else f"{PREDICTIONS_TABLE_BASE}_{PRED_SPLIT_ENV}"
     )
 
-    write_bigquery_table(pred_df, current_table, dataset="rhein_curated", if_exists="replace")
+    write_bigquery_table(
+        pred_df,
+        current_table,
+        dataset="rhein_curated",
+        if_exists="replace",
+    )
     if PRED_SPLIT_ENV == "production":
         write_bigquery_table(
             pred_df,

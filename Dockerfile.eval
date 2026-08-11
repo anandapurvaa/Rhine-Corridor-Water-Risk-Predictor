@@ -12,11 +12,10 @@ RUN python -m pip install --upgrade pip \
 
 COPY modeling ./modeling
 COPY config ./config
-COPY common ./common
 COPY ingestion ./ingestion
 COPY mlops ./mlops
 COPY sql ./sql
-COPY bqschemas ./bqschemas
+COPY bq_schemas ./bq_schemas
 
 RUN python -m compileall modeling common ingestion mlops
 

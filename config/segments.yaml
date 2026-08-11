@@ -7,6 +7,8 @@ segments:
       - BREISACH
       - IFFEZHEIM
       - MAXAU
+      - SPEYER
+      - MANNHEIM
 
   middle_rhine:
     label: "Middle Rhine"
@@ -18,12 +20,14 @@ segments:
       - OESTRICH
       - BINGEN
       - KOBLENZ
+      - BONN
 
   lower_rhine:
     label: "Lower Rhine"
     decision_gauge: "DUISBURG-RUHRORT"
     support_gauges:
       - KÖLN
+      - DÜSSELDORF
       - WESEL
       - REES
       - EMMERICH
@@ -34,3 +38,27 @@ segments:
     decision_gauge: "EMMERICH"
     support_gauges:
       - LOBITH
+      - PANNERDENSE KOP
+
+primary_segment_by_station:
+  BASEL-RHEINHALLE: upper_rhine
+  BREISACH: upper_rhine
+  IFFEZHEIM: upper_rhine
+  MAXAU: upper_rhine
+  SPEYER: upper_rhine
+  MANNHEIM: upper_rhine
+  KAUB: middle_rhine
+  WORMS: middle_rhine
+  MAINZ: middle_rhine
+  OESTRICH: middle_rhine
+  BINGEN: middle_rhine
+  KOBLENZ: middle_rhine
+  BONN: middle_rhine
+  KÖLN: lower_rhine
+  DÜSSELDORF: lower_rhine
+  DUISBURG-RUHRORT: lower_rhine
+  WESEL: lower_rhine
+  REES: lower_rhine
+  EMMERICH: delta_gateway
+  LOBITH: delta_gateway
+  PANNERDENSE KOP: delta_gateway
