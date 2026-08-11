@@ -211,6 +211,9 @@ def score_frame(
     else:
         raise ValueError(f"Unsupported target_mode={target_mode!r}")
 
+    # Explicitly round the generated prediction to 1 decimal point
+    result["prediction"] = result["prediction"].round(1)
+
     run_id = os.getenv("MLOPS_RUN_ID") or make_run_id(model_version, PRED_SPLIT_ENV)
     result["model_version"] = model_version
     result["run_id"] = run_id
