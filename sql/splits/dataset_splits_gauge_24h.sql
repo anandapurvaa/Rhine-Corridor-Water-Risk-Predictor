@@ -3,7 +3,9 @@ WITH params AS (
   SELECT 0.70 AS train_fraction, 0.15 AS validation_fraction, 24 * 7 AS gap_hours
 ),
 all_rows AS (
-  SELECT *
+  SELECT * REPLACE (
+    PARSE_TIMESTAMP('%Y-%m-%d %H:%M', timestamp_utc) AS timestamp_utc
+  )
   FROM `rhine-corridor-navigator.rhein_curated.supervised_gauge_24h_multisource`
   WHERE timestamp_utc IS NOT NULL
 ),
