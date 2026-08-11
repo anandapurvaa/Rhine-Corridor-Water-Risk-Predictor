@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import logging
 import os
+import pandas as pd
 from typing import Any, Callable
 
 from google.cloud import bigquery
@@ -64,14 +65,16 @@ JOB_TYPE = "daily_ingestion_prediction"
 logger = logging.getLogger(__name__)
 
 
-def _ensure_utc(value: datetime) -> datetime:
-    if value is None:
-        raise RuntimeError("Timestamp value is NULL")
-
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-
-    return value.astimezone(timezone.utc)
+def _ensure_utc(value):
+    # 1. If it's a string (due to our BigQuery formatting), parse it first
+    if isinstance(value, str):
+        value = pd.to_datetime(value, utc=True)
+        
+    # 2. Check for missing timezone info
+    if getattr(value, "tzinfo", None) is None:
+        value = value.replace(tzinfo=timezone.utc)
+        
+    return value
 
 
 def _query_latest_complete_input() -> datetime:
