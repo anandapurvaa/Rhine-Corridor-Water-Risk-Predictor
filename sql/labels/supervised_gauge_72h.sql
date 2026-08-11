@@ -30,7 +30,22 @@ WITH base AS (
   )
 )
 SELECT
-  *,
+  * REPLACE(
+    FORMAT_TIMESTAMP('%Y-%m-%d %H:%M', timestamp_utc) AS timestamp_utc,
+    FORMAT_TIMESTAMP('%Y-%m-%d %H:%M', ingestion_ts_utc) AS ingestion_ts_utc,
+    ROUND(value, 2) AS value,
+    ROUND(latitude, 2) AS latitude,
+    ROUND(longitude, 2) AS longitude,
+    ROUND(lead_1, 2) AS lead_1,
+    ROUND(lead_3, 2) AS lead_3,
+    ROUND(lead_6, 2) AS lead_6,
+    ROUND(lead_12, 2) AS lead_12,
+    ROUND(lead_24, 2) AS lead_24,
+    ROUND(lead_36, 2) AS lead_36,
+    ROUND(lead_48, 2) AS lead_48,
+    ROUND(lead_60, 2) AS lead_60,
+    ROUND(lead_72, 2) AS lead_72
+  ),
   CASE
     WHEN GREATEST(
       COALESCE(lead_1 <= 120, FALSE),

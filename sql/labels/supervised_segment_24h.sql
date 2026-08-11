@@ -24,4 +24,11 @@ WITH base AS (
     END AS target_low_water_24h
   FROM `rhine-corridor-navigator.rhein_curated.feature_segment_aggregation`
 )
-SELECT * FROM base;
+SELECT 
+  * REPLACE(
+    FORMAT_TIMESTAMP('%Y-%m-%d %H:%M', timestamp_utc) AS timestamp_utc,
+    ROUND(segment_min_waterlevel, 2) AS segment_min_waterlevel,
+    ROUND(segment_max_waterlevel, 2) AS segment_max_waterlevel,
+    ROUND(segment_avg_waterlevel, 2) AS segment_avg_waterlevel
+  ) 
+FROM base;

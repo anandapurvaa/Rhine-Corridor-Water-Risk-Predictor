@@ -1,0 +1,67 @@
+steps:
+  - name: "python:3.11-slim"
+    id: "python-syntax-check"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        python -m compileall modeling common ingestion mlops
+
+  - name: "python:3.11-slim"
+    id: "python-tests"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        python -m pip install --upgrade pip
+        python -m pip install -r requirements.txt
+        python -m pytest -q
+
+  - name: "gcr.io/cloud-builders/docker"
+    id: "build-evaluation-image"
+    args:
+      - "build"
+      - "-f"
+      - "Dockerfile.eval"
+      - "-t"
+      - "${_IMAGE}"
+      - "."
+
+  - name: "gcr.io/cloud-builders/docker"
+    id: "push-evaluation-image"
+    args:
+      - "push"
+      - "${_IMAGE}"
+
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    id: "deploy-cloud-run-evaluation-job"
+    entrypoint: "gcloud"
+    args:
+      - "run"
+      - "jobs"
+      - "deploy"
+      - "${_JOB_NAME}"
+      - "--project=${PROJECT_ID}"
+      - "--region=${_REGION}"
+      - "--image=${_IMAGE}"
+      - "--command=python"
+      - "--args=-m,modeling.evaluate_predictions_gauge_24h"
+      - "--tasks=1"
+      - "--max-retries=1"
+      - "--task-timeout=1800s"
+      - "--set-env-vars=GCP_PROJECT_ID=${PROJECT_ID},GCP_REGION=${_REGION},CURATED_DATASET=rhein_curated,GAUGE24H_EVAL_SPLIT_NAME=production,PREDICTIONS_HISTORY_TABLE=gauge_24h_prediction_history,GAUGE24H_ACTUALS_TABLE=pegelonline_measurements_curated,GAUGE24H_ACTUAL_MATCH_TOLERANCE_MINUTES=30,EVALUATIONS_TABLE=gauge_24h_prediction_evaluations,GAUGE24H_THRESHOLD_CONFIG_PATH=config/threshold.yaml"
+
+images:
+  - "${_IMAGE}"
+
+substitutions:
+  _REGION: "europe-west3"
+  _REPOSITORY: "gauge24h"
+  _JOB_NAME: "rhine-gauge-24h-evaluation"
+  _IMAGE: "europe-west3-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/rhine-gauge-24h-evaluation:commit-${SHORT_SHA}"
+
+options:
+  dynamicSubstitutions: true
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: "1800s"
