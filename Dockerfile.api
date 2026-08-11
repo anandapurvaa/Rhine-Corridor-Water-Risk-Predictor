@@ -2,16 +2,30 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    build-essential \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt ./
+RUN python -m pip install --upgrade pip \
+    && python -m pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY api/ ./api/
+COPY modeling/ ./modeling/
+COPY config/ ./config/
 
-ENV PYTHONPATH=/app
+ENV PYTHONPATH=/app \
+    GCP_PROJECT_ID=rhine-corridor-navigator \
+    GCP_REGION=europe-west3 \
+    CURATED_DATASET=rhein_curated \
+    MLOPS_DATASET=mlops \
+    PREDICTIONS_TABLE=gauge_24h_production_predictions \
+    PREDICTIONS_HISTORY_TABLE=gauge_24h_prediction_history \
+    EVALUATIONS_TABLE=gauge_24h_prediction_evaluations \
+    STATIONS_TABLE=dim_station \
+    GAUGE24H_SEGMENTS_CONFIG_PATH=config/segments.yaml
+
+RUN python -m compileall api modeling
 
 EXPOSE 8080
 

@@ -2,18 +2,26 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    build-essential \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --upgrade pip \
+    && python -m pip install --no-cache-dir -r requirements.txt
 
 COPY modeling/ ./modeling/
 COPY api/ ./api/
 COPY dash_app/ ./dash_app/
+COPY config/ ./config/
 
-ENV PYTHONPATH=/app
+ENV PYTHONPATH=/app \
+    GAUGE24H_THRESHOLDS_PATH=/app/config/thresholds.yaml \
+    GAUGE24H_SEGMENTS_PATH=/app/config/segments.yaml \
+    API_BASE_URL=https://gauge24h-api-360668288184.europe-west3.run.app \
+    API_TIMEOUT_SECONDS=15
+
+RUN python -m compileall modeling api dash_app
 
 EXPOSE 8080
 
