@@ -6,9 +6,9 @@ SELECT
   job_type,
   cloud_run_job,
   status,
-  started_at_utc,
-  ended_at_utc,
-  duration_seconds,
+  FORMAT_TIMESTAMP('%Y-%m-%d %H:%M', started_at_utc) AS started_at_utc,
+  FORMAT_TIMESTAMP('%Y-%m-%d %H:%M', ended_at_utc) AS ended_at_utc,
+  ROUND(duration_seconds, 2) AS duration_seconds,
   rows_ingested,
   rows_predicted,
   stations_processed,
@@ -16,7 +16,7 @@ SELECT
   input_split,
   error_type,
   error_message,
-  created_at_utc
+  FORMAT_TIMESTAMP('%Y-%m-%d %H:%M', created_at_utc) AS created_at_utc
 FROM `rhine-corridor-navigator.mlops.pipeline_runs`
 QUALIFY ROW_NUMBER() OVER (
   ORDER BY started_at_utc DESC
@@ -30,10 +30,10 @@ SELECT
   run_id,
   metric_name,
   metric_scope,
-  metric_value,
-  threshold_value,
+  ROUND(metric_value, 2) AS metric_value,
+  ROUND(threshold_value, 2) AS threshold_value,
   status,
-  measured_at_utc,
+  FORMAT_TIMESTAMP('%Y-%m-%d %H:%M', measured_at_utc) AS measured_at_utc,
   details_json
 FROM `rhine-corridor-navigator.mlops.data_quality_metrics`
 QUALIFY ROW_NUMBER() OVER (
@@ -50,13 +50,13 @@ SELECT
   job_type,
   stage_name,
   status,
-  duration_seconds,
+  ROUND(duration_seconds, 2) AS duration_seconds,
   rows_read,
   rows_written,
   station_count,
   metadata_json,
-  started_at_utc,
-  ended_at_utc
+  FORMAT_TIMESTAMP('%Y-%m-%d %H:%M', started_at_utc) AS started_at_utc,
+  FORMAT_TIMESTAMP('%Y-%m-%d %H:%M', ended_at_utc) AS ended_at_utc
 FROM `rhine-corridor-navigator.mlops.stage_events`
 QUALIFY ROW_NUMBER() OVER (
   PARTITION BY stage_name
@@ -72,8 +72,7 @@ SELECT
   COUNT(*) AS total_runs,
   COUNTIF(status = 'success') AS successful_runs,
   COUNTIF(status = 'failed') AS failed_runs,
-  ROUND(AVG(duration_seconds), 2)
-    AS average_duration_seconds,
+  ROUND(AVG(duration_seconds), 2) AS average_duration_seconds,
   MAX(rows_ingested) AS maximum_rows_ingested,
   MAX(rows_predicted) AS maximum_rows_predicted,
   MAX(stations_processed) AS maximum_stations_processed
@@ -94,7 +93,7 @@ SELECT
     IF(status = 'fail', metric_name, NULL)
     IGNORE NULLS
   ) AS failed_metric_names,
-  MAX(measured_at_utc) AS last_measured_at_utc
+  FORMAT_TIMESTAMP('%Y-%m-%d %H:%M', MAX(measured_at_utc)) AS last_measured_at_utc
 FROM `rhine-corridor-navigator.mlops.data_quality_metrics`
 GROUP BY run_id
-ORDER BY last_measured_at_utc DESC;
+ORDER BY MAX(measured_at_utc) DESC;
