@@ -381,20 +381,18 @@ def apply_incremental_recent_filter(
         return df
 
     target_table_name = cfg.get("incremental_table_name", "dwd_hourly_observations")
-    lookback_hours = int(cfg.get("incremental_lookback_hours", 48))
     watermark = get_bigquery_max_timestamp(table_name=target_table_name)
 
     if watermark is None:
         logger.info("dwd_incremental_filter_skip reason=no_watermark")
         return df
 
-    cutoff = watermark - pd.Timedelta(hours=lookback_hours)
-    filtered = df[df["timestamp_utc"] > cutoff].copy()
+    # Strictly filter for records newer than the BigQuery watermark
+    filtered = df[df["timestamp_utc"] > watermark].copy()
 
     logger.info(
-        "dwd_incremental_filter_applied watermark=%s cutoff=%s before_rows=%s after_rows=%s",
+        "dwd_incremental_filter_applied watermark=%s before_rows=%s after_rows=%s",
         watermark,
-        cutoff,
         len(df),
         len(filtered),
     )

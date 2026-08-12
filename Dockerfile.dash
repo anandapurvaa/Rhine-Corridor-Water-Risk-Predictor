@@ -15,6 +15,7 @@ COPY api/ ./api/
 COPY dash_app/ ./dash_app/
 COPY config/ ./config/
 
+ENV GAUGE24H_OPERATIONAL_THRESHOLDS_PATH=/app/config/operational_thresholds.yaml
 ENV PYTHONPATH=/app \
     GAUGE24H_THRESHOLDS_PATH=/app/config/thresholds.yaml \
     GAUGE24H_SEGMENTS_PATH=/app/config/segments.yaml \

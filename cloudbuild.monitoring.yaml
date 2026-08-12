@@ -1,0 +1,20 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.monitoring
+      - -t
+      - europe-west3-docker.pkg.dev/$PROJECT_ID/gauge24h/gauge24h-monitoring:$SHORT_SHA
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - europe-west3-docker.pkg.dev/$PROJECT_ID/gauge24h/gauge24h-monitoring:$SHORT_SHA
+
+images:
+  - europe-west3-docker.pkg.dev/$PROJECT_ID/gauge24h/gauge24h-monitoring:$SHORT_SHA
+
+options:
+  logging: CLOUD_LOGGING_ONLY

@@ -22,6 +22,28 @@ CURATED_DATASET = os.getenv(
     "rhein_curated",
 ).strip()
 
+EVAL_SPLIT_NAME = os.getenv(
+    "GAUGE24H_EVAL_SPLIT_NAME",
+    "test",
+).strip().lower()
+
+if EVAL_SPLIT_NAME not in {
+    "production",
+    "validation",
+    "test",
+}:
+    raise ValueError(
+        "GAUGE24H_EVAL_SPLIT_NAME must be "
+        "'production', 'validation', or 'test'"
+    )
+
+# Dynamically name the BigQuery evaluation table based on the split if not explicitly provided via environment variable
+DEFAULT_EVAL_TABLE = (
+    "gauge_24h_prediction_evaluations"
+    if EVAL_SPLIT_NAME == "production"
+    else f"gauge_24h_{EVAL_SPLIT_NAME}_prediction_evaluations"
+)
+
 EVALUATION_KEY_COLUMNS = [
     "split_name",
     "run_id",
@@ -32,27 +54,28 @@ EVALUATION_KEY_COLUMNS = [
 
 EVALUATION_TABLE = os.getenv(
     "EVALUATIONS_TABLE",
-    "gauge_24h_prediction_evaluations",
+    DEFAULT_EVAL_TABLE,
 ).strip()
 
+# Split-aware local artifact filenames to prevent test runs from overwriting production files
 EVALUATION_CSV = (
     OUTPUT_DIR
-    / "gauge_24h_prediction_evaluation.csv"
+    / f"gauge_24h_prediction_evaluation_{EVAL_SPLIT_NAME}.csv"
 )
 
 EVALUATION_SUMMARY_JSON = (
     OUTPUT_DIR
-    / "gauge_24h_prediction_evaluation_summary.json"
+    / f"gauge_24h_prediction_evaluation_summary_{EVAL_SPLIT_NAME}.json"
 )
 
 STATION_METRICS_CSV = (
     OUTPUT_DIR
-    / "gauge_24h_prediction_evaluation_station_metrics.csv"
+    / f"gauge_24h_prediction_evaluation_station_metrics_{EVAL_SPLIT_NAME}.csv"
 )
 
 MODEL_METRICS_CSV = (
     OUTPUT_DIR
-    / "gauge_24h_prediction_evaluation_model_metrics.csv"
+    / f"gauge_24h_prediction_evaluation_model_metrics_{EVAL_SPLIT_NAME}.csv"
 )
 
 PREDICTION_HISTORY_TABLE = os.getenv(
@@ -93,21 +116,6 @@ ACTUAL_MATCH_TOLERANCE_MINUTES = int(
         "30",
     )
 )
-
-EVAL_SPLIT_NAME = os.getenv(
-    "GAUGE24H_EVAL_SPLIT_NAME",
-    "test",
-).strip().lower()
-
-if EVAL_SPLIT_NAME not in {
-    "production",
-    "validation",
-    "test",
-}:
-    raise ValueError(
-        "GAUGE24H_EVAL_SPLIT_NAME must be "
-        "'production', 'validation', or 'test'"
-    )
 
 if EVAL_SPLIT_NAME == "production":
     PREDICTIONS_TABLE = PREDICTION_HISTORY_TABLE
@@ -1526,7 +1534,7 @@ def main():
     write_bigquery_table(
         combined_eval_df,
         EVALUATION_TABLE,
-        dataset=CURATED_DATASET,
+        dataset="rhein_curated",
         if_exists="replace",
     )
 

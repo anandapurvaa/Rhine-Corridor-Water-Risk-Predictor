@@ -1,0 +1,23 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    GCP_REGION=europe-west3 \
+    CURATED_DATASET=rhein_curated \
+    MLOPS_DATASET=mlops \
+    PREDICTIONS_TABLE=gauge_24h_production_predictions \
+    EVALUATIONS_TABLE=gauge_24h_prediction_evaluations \
+    QUALITY_TABLE=data_quality_metrics \
+    EXPECTED_STATION_COUNT=19 \
+    MIN_PREDICTION_ROWS=19 \
+    MAX_PREDICTION_AGE_HOURS=26 \
+    MAX_EVALUATION_AGE_HOURS=50 \
+    FAIL_ON_MISSING_EVALUATION=false
+
+WORKDIR /app
+COPY monitoring/requirements_monitoring.txt ./requirements.txt
+RUN python -m pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+COPY monitoring/watchdog.py ./watchdog.py
+RUN python -m py_compile watchdog.py
+CMD ["python", "watchdog.py"]

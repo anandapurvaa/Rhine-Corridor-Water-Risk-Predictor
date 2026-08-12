@@ -1,0 +1,29 @@
+# Monitoring thresholds for the Rhine Gauge 24h production pipeline.
+# These are operational checks, not water-risk thresholds.
+# Keep water-level decision thresholds in config/thresholds.yaml.
+
+monitoring:
+  expected_station_count: 19
+  minimum_prediction_rows: 19
+  maximum_prediction_age_hours: 26
+  maximum_evaluation_age_hours: 50
+  fail_on_missing_evaluation: false
+
+  # Set these after reviewing the walk-forward evaluation baseline.
+  # The current watchdog defaults are intentionally disabled by using null.
+  maximum_mae: null
+  maximum_rmse: null
+
+jobs:
+  daily_pipeline: rhine-daily-pipeline
+  evaluation: rhine-gauge-24h-evaluation
+  training: gauge24h-train
+  api: gauge24h-api
+  dashboard: gauge24h-dash
+
+schedules:
+  timezone: Europe/Berlin
+  daily_pipeline: "0 1 * * *"
+  evaluation: "0 2 * * *"
+  monitoring: "0 3 * * *"
+  monthly_training: "0 22 10 * *"
