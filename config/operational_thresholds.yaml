@@ -1,0 +1,107 @@
+# Operational navigation bands for all gauges.
+#
+# These are operational guidance bands, not official legal or hydrological
+# thresholds. The values are gauge-reading centimetres (cm).
+#
+# DEFAULT applies to every station that does not have a station-specific entry.
+# Add a station-specific block below DEFAULT when its commercial-navigation
+# thresholds differ.
+
+operational_thresholds:
+  DEFAULT:
+    unit: cm
+    reference: "General Rhine low-water cargo-navigation guidance"
+    informational_only: true
+
+    bands:
+      - id: normal_low_water_operations
+        label: "Generally normal low-water operations"
+        min_cm: 151
+        max_cm: null
+        severity: normal
+        color: green
+
+      - id: reduced_loading
+        label: "Low water; barges progressively reduce cargo and surcharges increase"
+        min_cm: 81
+        max_cm: 150
+        severity: warning
+        color: yellow
+
+      - id: conditional_transport
+        label: "Transport obligation/loading guarantee commonly ends; transport may continue by agreement"
+        min_cm: 41
+        max_cm: 80
+        severity: high
+        color: orange
+
+      - id: standard_cargo_suspended
+        label: "Standard commercial cargo movement usually suspended or practically impossible"
+        min_cm: 36
+        max_cm: 40
+        severity: critical
+        color: red
+
+      - id: special_vessels_only
+        label: "Only specially designed or lightly loaded vessels may continue"
+        min_cm: 31
+        max_cm: 35
+        severity: critical
+        color: red
+
+      - id: near_total_disruption
+        label: "Near-total disruption of normal cargo navigation"
+        min_cm: null
+        max_cm: 30
+        severity: extreme
+        color: darkred
+
+  # Kaub retains an explicit block because it is the reference gauge for the
+  # operational bands supplied for the dashboard.
+  KAUB:
+    unit: cm
+    reference: "Kaub operational low-water cargo guidance"
+    informational_only: true
+
+    bands:
+      - id: normal_low_water_operations
+        label: "Generally normal low-water operations"
+        min_cm: 151
+        max_cm: null
+        severity: normal
+        color: green
+
+      - id: reduced_loading
+        label: "Low water; barges progressively reduce cargo and surcharges increase"
+        min_cm: 81
+        max_cm: 150
+        severity: warning
+        color: yellow
+
+      - id: conditional_transport
+        label: "Transport obligation/loading guarantee commonly ends; transport may continue by agreement"
+        min_cm: 41
+        max_cm: 80
+        severity: high
+        color: orange
+
+      - id: standard_cargo_suspended
+        label: "Standard commercial cargo movement usually suspended or practically impossible"
+        min_cm: 36
+        max_cm: 40
+        severity: critical
+        color: red
+
+      - id: special_vessels_only
+        label: "Only specially designed or lightly loaded vessels may continue"
+        min_cm: 31
+        max_cm: 35
+        severity: critical
+        color: red
+
+      - id: near_total_disruption
+        label: "Near-total disruption of normal cargo navigation"
+        min_cm: null
+        max_cm: 30
+        severity: extreme
+        color: darkred
