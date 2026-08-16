@@ -3,21 +3,34 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
+    GCP_PROJECT_ID=rhine-corridor-navigator \
     GCP_REGION=europe-west3 \
     CURATED_DATASET=rhein_curated \
     MLOPS_DATASET=mlops \
     PREDICTIONS_TABLE=gauge_24h_production_predictions \
     EVALUATIONS_TABLE=gauge_24h_prediction_evaluations \
     QUALITY_TABLE=data_quality_metrics \
+    TRAINING_JOB_NAME=gauge24h-train \
+    DAILY_JOB_NAME=rhine-daily-pipeline \
+    EVALUATION_JOB_NAME=rhine-gauge-24h-evaluation \
     EXPECTED_STATION_COUNT=19 \
     MIN_PREDICTION_ROWS=19 \
     MAX_PREDICTION_AGE_HOURS=26 \
     MAX_EVALUATION_AGE_HOURS=50 \
-    FAIL_ON_MISSING_EVALUATION=false
+    MAX_MAE=999999 \
+    MAX_RMSE=999999 \
+    FAIL_ON_MISSING_EVALUATION=false \
+    LOG_LEVEL=INFO
 
 WORKDIR /app
+
 COPY monitoring/requirements_monitoring.txt ./requirements.txt
-RUN python -m pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+
+RUN python -m pip install --upgrade pip \
+    && python -m pip install --no-cache-dir -r requirements.txt
+
 COPY monitoring/watchdog.py ./watchdog.py
+
 RUN python -m py_compile watchdog.py
+
 CMD ["python", "watchdog.py"]

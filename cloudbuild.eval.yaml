@@ -49,7 +49,7 @@ steps:
       - "--tasks=1"
       - "--max-retries=1"
       - "--task-timeout=1800s"
-      - "--set-env-vars=GCP_PROJECT_ID=${PROJECT_ID},GCP_REGION=${_REGION},CURATED_DATASET=rhein_curated,GAUGE24H_EVAL_SPLIT_NAME=production,PREDICTIONS_HISTORY_TABLE=gauge_24h_prediction_history,GAUGE24H_ACTUALS_TABLE=pegelonline_measurements_curated,GAUGE24H_ACTUAL_MATCH_TOLERANCE_MINUTES=30,EVALUATIONS_TABLE=gauge_24h_prediction_evaluations,GAUGE24H_THRESHOLD_CONFIG_PATH=config/threshold.yaml"
+      - "--set-env-vars=GCP_PROJECT_ID=${PROJECT_ID},GCP_REGION=${_REGION},CURATED_DATASET=rhein_curated,GAUGE24H_EVAL_SPLIT_NAME=production,PREDICTIONS_HISTORY_TABLE=gauge_24h_prediction_history,GAUGE24H_ACTUALS_TABLE=pegelonline_measurements_curated,GAUGE24H_ACTUAL_MATCH_TOLERANCE_MINUTES=30,EVALUATIONS_TABLE=gauge_24h_prediction_evaluations,GAUGE24H_THRESHOLD_CONFIG_PATH=config/thresholds.yaml"
 
 images:
   - "${_IMAGE}"

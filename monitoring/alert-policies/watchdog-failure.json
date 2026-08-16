@@ -1,15 +1,15 @@
 {
-  "displayName": "Rhine daily pipeline failure",
+  "displayName": "Rhine monitoring watchdog failure",
   "documentation": {
-    "content": "The rhine-daily-pipeline Cloud Run Job reported a pipeline failure. Check Cloud Run execution logs, mlops.pipeline_runs, and the daily pipeline execution.",
+    "content": "The gauge24h-monitoring Cloud Run Job failed before completing its monitoring checks. Check the Cloud Run execution logs and the watchdog_failed event.",
     "mimeType": "text/markdown"
   },
   "combiner": "OR",
   "conditions": [
     {
-      "displayName": "Daily pipeline failure count is greater than zero",
+      "displayName": "Watchdog failure count is greater than zero",
       "conditionThreshold": {
-        "filter": "metric.type=\"logging.googleapis.com/user/rhine_daily_pipeline_failures\" resource.type=\"cloud_run_job\"",
+        "filter": "metric.type=\"logging.googleapis.com/user/rhine_monitoring_watchdog_failures\" resource.type=\"cloud_run_job\"",
         "comparison": "COMPARISON_GT",
         "thresholdValue": 0,
         "duration": "0s",

@@ -24,6 +24,6 @@ ENV GAUGE24H_EVAL_SPLIT_NAME=production \
     GAUGE24H_ACTUALS_TABLE=pegelonline_measurements_curated \
     GAUGE24H_ACTUAL_MATCH_TOLERANCE_MINUTES=30 \
     EVALUATIONS_TABLE=gauge_24h_prediction_evaluations \
-    GAUGE24H_THRESHOLD_CONFIG_PATH=config/threshold.yaml
+    GAUGE24H_THRESHOLD_CONFIG_PATH=config/thresholds.yaml
 
 CMD ["python", "-m", "modeling.evaluate_predictions_gauge_24h"]

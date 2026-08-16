@@ -1,49 +1,121 @@
 $ErrorActionPreference = "Stop"
 
-$PROJECT_ID = "rhine-corridor-navigator"
-$JOB_NAME = "rhine-daily-pipeline"
+$ProjectId = if ($env:GCP_PROJECT_ID) {
+    $env:GCP_PROJECT_ID
+} else {
+    "rhine-corridor-navigator"
+}
 
-gcloud config set project $PROJECT_ID
+
+function Test-LogMetric {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    $oldPreference = $ErrorActionPreference
+
+    try {
+        $ErrorActionPreference = "Continue"
+
+        $null = & gcloud logging metrics describe $Name `
+            --project=$ProjectId `
+            --format="value(name)" 2>&1
+
+        return ($LASTEXITCODE -eq 0)
+    }
+    finally {
+        $ErrorActionPreference = $oldPreference
+    }
+}
 
 
-$PIPELINE_FAILURE_FILTER = @'
+function Create-LogMetric {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [Parameter(Mandatory = $true)]
+        [string]$JobName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ServiceName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Event
+    )
+
+    $Filter = @"
 resource.type="cloud_run_job"
-resource.labels.job_name="rhine-daily-pipeline"
-(
-  jsonPayload.message="pipeline_failed"
-  OR textPayload:"pipeline_failed"
-)
-'@
+resource.labels.job_name="$JobName"
+jsonPayload.service="$ServiceName"
+jsonPayload.event="$Event"
+jsonPayload.status="fail"
+"@
 
-gcloud logging metrics create rhine_daily_pipeline_failures `
-    --project=$PROJECT_ID `
-    --description="Count of failed Rhine daily pipeline executions." `
-    --log-filter="$PIPELINE_FAILURE_FILTER"
+    Write-Host "Checking log metric: $Name"
+
+    if (Test-LogMetric -Name $Name) {
+        Write-Host "Log metric already exists: $Name"
+        return
+    }
+
+    Write-Host "Creating log metric: $Name"
+
+    & gcloud logging metrics create $Name `
+        --project=$ProjectId `
+        --description="Rhine Corridor monitoring failures for $Event" `
+        --log-filter=$Filter
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not create log metric [$Name]. gcloud exit code: ${LASTEXITCODE}"
+    }
+
+    Write-Host "Created log metric: $Name"
+}
 
 
-$DATA_QUALITY_FAILURE_FILTER = @'
-resource.type="cloud_run_job"
-resource.labels.job_name="rhine-daily-pipeline"
-jsonPayload.message="data_quality_checks_completed"
-jsonPayload.data_quality_status="fail"
-'@
-
-gcloud logging metrics create rhine_daily_pipeline_quality_failures `
-    --project=$PROJECT_ID `
-    --description="Count of failed data-quality checks." `
-    --log-filter="$DATA_QUALITY_FAILURE_FILTER"
+Create-LogMetric `
+    -Name "rhine_monitoring_prediction_failures" `
+    -JobName "gauge24h-monitoring" `
+    -ServiceName "gauge24h-watchdog" `
+    -Event "prediction_health"
 
 
-$PIPELINE_SUCCESS_FILTER = @'
-resource.type="cloud_run_job"
-resource.labels.job_name="rhine-daily-pipeline"
-(
-  jsonPayload.message="pipeline_completed"
-  OR textPayload:"pipeline_completed"
-)
-'@
+Create-LogMetric `
+    -Name "rhine_monitoring_quality_failures" `
+    -JobName "gauge24h-monitoring" `
+    -ServiceName "gauge24h-watchdog" `
+    -Event "data_quality_health"
 
-gcloud logging metrics create rhine_daily_pipeline_successes `
-    --project=$PROJECT_ID `
-    --description="Count of successful Rhine daily pipeline executions." `
-    --log-filter="$PIPELINE_SUCCESS_FILTER"
+
+Create-LogMetric `
+    -Name "rhine_monitoring_stage_failures" `
+    -JobName "gauge24h-monitoring" `
+    -ServiceName "gauge24h-watchdog" `
+    -Event "stage_health"
+
+
+Create-LogMetric `
+    -Name "rhine_monitoring_evaluation_failures" `
+    -JobName "gauge24h-monitoring" `
+    -ServiceName "gauge24h-watchdog" `
+    -Event "evaluation_health"
+
+
+Create-LogMetric `
+    -Name "rhine_monitoring_watchdog_failures" `
+    -JobName "gauge24h-monitoring" `
+    -ServiceName "gauge24h-watchdog" `
+    -Event "watchdog_failed"
+
+
+Create-LogMetric `
+    -Name "rhine_training_failures" `
+    -JobName "gauge24h-train" `
+    -ServiceName "gauge24h-training" `
+    -Event "training_failed"
+
+
+Write-Host ""
+Write-Host "All monitoring log metrics are ready."

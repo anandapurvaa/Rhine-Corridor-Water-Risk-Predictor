@@ -9,62 +9,146 @@ from typing import Any
 
 from google.cloud import bigquery
 
-PROJECT_ID = os.getenv("GCP_PROJECT_ID", os.getenv("GOOGLE_CLOUD_PROJECT", "rhine-corridor-navigator")).strip()
-REGION = os.getenv("GCP_REGION", "europe-west3").strip()
-CURATED_DATASET = os.getenv("CURATED_DATASET", "rhein_curated").strip()
-MLOPS_DATASET = os.getenv("MLOPS_DATASET", "mlops").strip()
-PREDICTIONS_TABLE = os.getenv("PREDICTIONS_TABLE", "gauge_24h_production_predictions").strip()
-EVALUATIONS_TABLE = os.getenv("EVALUATIONS_TABLE", "gauge_24h_prediction_evaluations").strip()
-QUALITY_TABLE = os.getenv("QUALITY_TABLE", "data_quality_metrics").strip()
-TRAINING_JOB = os.getenv("TRAINING_JOB_NAME", "gauge24h-train").strip()
-DAILY_JOB = os.getenv("DAILY_JOB_NAME", "rhine-daily-pipeline").strip()
-EVALUATION_JOB = os.getenv("EVALUATION_JOB_NAME", "rhine-gauge-24h-evaluation").strip()
-EXPECTED_STATIONS = int(os.getenv("EXPECTED_STATION_COUNT", "19"))
-MIN_PREDICTION_ROWS = int(os.getenv("MIN_PREDICTION_ROWS", "19"))
-MAX_PREDICTION_AGE_HOURS = float(os.getenv("MAX_PREDICTION_AGE_HOURS", "26"))
-MAX_EVALUATION_AGE_HOURS = float(os.getenv("MAX_EVALUATION_AGE_HOURS", "50"))
-MAX_MAE = float(os.getenv("MAX_MAE", "999999"))
-MAX_RMSE = float(os.getenv("MAX_RMSE", "999999"))
-FAIL_ON_MISSING_EVALUATION = os.getenv("FAIL_ON_MISSING_EVALUATION", "false").lower() == "true"
 
-logging.basicConfig(stream=sys.stdout, level=os.getenv("LOG_LEVEL", "INFO"), format="%(message)s")
+PROJECT_ID = os.getenv(
+    "GCP_PROJECT_ID",
+    "rhine-corridor-navigator",
+).strip()
+
+REGION = os.getenv(
+    "GCP_REGION",
+    "europe-west3",
+).strip()
+
+MLOPS_DATASET = os.getenv(
+    "MLOPS_DATASET",
+    "mlops",
+).strip()
+
+EXPECTED_STATIONS = int(
+    os.getenv("EXPECTED_STATION_COUNT", "19")
+)
+
+MIN_PREDICTION_ROWS = int(
+    os.getenv("MIN_PREDICTION_ROWS", "19")
+)
+
+MAX_PREDICTION_AGE_HOURS = float(
+    os.getenv("MAX_PREDICTION_AGE_HOURS", "26")
+)
+
+MAX_VALIDATION_EVALUATION_AGE_HOURS = float(
+    os.getenv(
+        "MAX_VALIDATION_EVALUATION_AGE_HOURS",
+        "840",
+    )
+)
+
+MAX_MAE = float(
+    os.getenv("MAX_MAE", "999999")
+)
+
+MAX_RMSE = float(
+    os.getenv("MAX_RMSE", "999999")
+)
+
+FAIL_ON_MISSING_EVALUATION = (
+    os.getenv(
+        "FAIL_ON_MISSING_EVALUATION",
+        "false",
+    ).lower()
+    == "true"
+)
+
+logging.basicConfig(
+    stream=sys.stdout,
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(message)s",
+)
+
 logger = logging.getLogger("gauge24h-watchdog")
-client = bigquery.Client(project=PROJECT_ID, location=REGION)
+
+client = bigquery.Client(
+    project=PROJECT_ID,
+    location=REGION,
+)
 
 
-def emit(event: str, status: str, **fields: Any) -> None:
+def emit(
+    event: str,
+    status: str,
+    **fields: Any,
+) -> None:
     payload = {
         "event": event,
         "status": status,
         "service": "gauge24h-watchdog",
         "project_id": PROJECT_ID,
         "region": REGION,
-        "measured_at_utc": datetime.now(timezone.utc).isoformat(),
+        "measured_at_utc": datetime.now(
+            timezone.utc
+        ).isoformat(),
         **fields,
     }
-    logger.info(json.dumps(payload, default=str, separators=(",", ":")))
+
+    logger.info(
+        json.dumps(
+            payload,
+            default=str,
+            separators=(",", ":"),
+        )
+    )
 
 
-def query(sql: str) -> list[dict[str, Any]]:
-    return [dict(row.items()) for row in client.query(sql, location=REGION).result()]
+def query(
+    sql: str,
+) -> list[dict[str, Any]]:
+    return [
+        dict(row.items())
+        for row in client.query(
+            sql,
+            location=REGION,
+        ).result()
+    ]
 
 
-def parse_utc(value: Any) -> datetime | None:
+def parse_utc(
+    value: Any,
+) -> datetime | None:
     if value is None:
         return None
+
     if isinstance(value, datetime):
         parsed = value
     else:
         text = str(value).strip()
-        if not text or text.lower() in {"none", "nan", "nat", "null"}:
+
+        if text.lower() in {
+            "",
+            "none",
+            "null",
+            "nan",
+            "nat",
+        }:
             return None
+
         normalized = text
+
         if normalized.endswith(" UTC"):
-            normalized = normalized[:-4].strip() + "+00:00"
+            normalized = (
+                normalized[:-4].strip()
+                + "+00:00"
+            )
         elif normalized.endswith("Z"):
-            normalized = normalized[:-1] + "+00:00"
+            normalized = (
+                normalized[:-1]
+                + "+00:00"
+            )
+
         try:
-            parsed = datetime.fromisoformat(normalized)
+            parsed = datetime.fromisoformat(
+                normalized
+            )
         except ValueError:
             formats = (
                 "%Y-%m-%d %H:%M:%S UTC",
@@ -72,110 +156,317 @@ def parse_utc(value: Any) -> datetime | None:
                 "%Y-%m-%d %H:%M:%S",
                 "%Y-%m-%d %H:%M:%S.%f",
             )
-            for fmt in formats:
+
+            for date_format in formats:
                 try:
-                    parsed = datetime.strptime(text, fmt)
+                    parsed = datetime.strptime(
+                        text,
+                        date_format,
+                    )
                     break
                 except ValueError:
                     continue
             else:
-                raise ValueError(f"Unsupported timestamp format: {text!r}")
+                raise ValueError(
+                    f"Unsupported timestamp format: {value!r}"
+                )
+
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
+        return parsed.replace(
+            tzinfo=timezone.utc
+        )
+
     return parsed.astimezone(timezone.utc)
 
 
-def age_hours(value: Any) -> float | None:
+def age_hours(
+    value: Any,
+) -> float | None:
     parsed = parse_utc(value)
+
     if parsed is None:
         return None
-    return (datetime.now(timezone.utc) - parsed).total_seconds() / 3600
+
+    return (
+        datetime.now(timezone.utc) - parsed
+    ).total_seconds() / 3600
 
 
-def check_predictions() -> bool:
+def check_pipeline() -> bool:
     sql = f"""
-    SELECT COUNT(*) AS prediction_rows,
-           COUNT(DISTINCT station_name) AS station_count,
-           MAX(prediction_ready_utc) AS latest_ready_utc,
-           MAX(forecast_timestamp_utc) AS latest_forecast_utc,
-           ANY_VALUE(run_id) AS run_id,
-           ANY_VALUE(model_version) AS model_version
-    FROM `{PROJECT_ID}.{CURATED_DATASET}.{PREDICTIONS_TABLE}`
-    WHERE split_name = 'production'
-      AND run_id = (
-        SELECT run_id FROM `{PROJECT_ID}.{CURATED_DATASET}.{PREDICTIONS_TABLE}`
-        WHERE split_name = 'production'
-        ORDER BY prediction_ready_utc DESC LIMIT 1
-      )
+        SELECT *
+        FROM `{PROJECT_ID}.{MLOPS_DATASET}.v_latest_pipeline_health_by_job`
+        ORDER BY job_type
     """
-    row = (query(sql) or [{}])[0]
-    prediction_age = age_hours(row.get("latest_ready_utc"))
-    checks = {
-        "rows_ok": int(row.get("prediction_rows") or 0) >= MIN_PREDICTION_ROWS,
-        "stations_ok": int(row.get("station_count") or 0) >= EXPECTED_STATIONS,
-        "freshness_ok": prediction_age is not None and prediction_age <= MAX_PREDICTION_AGE_HOURS,
+
+    rows = query(sql)
+
+    if not rows:
+        emit(
+            "pipeline_health",
+            "fail",
+            reason="no_pipeline_health_rows",
+        )
+        return False
+
+    valid_statuses = {
+        "success",
+        "succeeded",
+        "ok",
+        "pass",
     }
-    ok = all(checks.values())
-    emit("prediction_health", "pass" if ok else "fail", checks=checks,
-         prediction_rows=row.get("prediction_rows"), station_count=row.get("station_count"),
-         age_hours=prediction_age, run_id=row.get("run_id"), model_version=row.get("model_version"))
+
+    failed_jobs = [
+        row
+        for row in rows
+        if str(
+            row.get("status", "")
+        ).lower()
+        not in valid_statuses
+    ]
+
+    ok = not failed_jobs
+
+    emit(
+        "pipeline_health",
+        "pass" if ok else "fail",
+        job_count=len(rows),
+        failed_job_count=len(failed_jobs),
+        jobs=rows,
+    )
+
     return ok
 
 
 def check_quality() -> bool:
     sql = f"""
-    SELECT metric_name, metric_value, threshold_value, status, measured_at_utc
-    FROM `{PROJECT_ID}.{MLOPS_DATASET}.{QUALITY_TABLE}`
-    WHERE run_id = (
-      SELECT run_id FROM `{PROJECT_ID}.{MLOPS_DATASET}.{QUALITY_TABLE}`
-      ORDER BY measured_at_utc DESC LIMIT 1
-    )
-    ORDER BY metric_name
+        SELECT *
+        FROM `{PROJECT_ID}.{MLOPS_DATASET}.v_latest_quality_health`
+        ORDER BY metric_name, metric_scope
     """
+
     rows = query(sql)
+
     if not rows:
-        emit("data_quality_health", "fail", reason="no_quality_metrics")
+        emit(
+            "data_quality_health",
+            "fail",
+            reason="no_quality_health_rows",
+        )
         return False
-    ok = all(str(row.get("status", "")).lower() in {"pass", "passed", "ok", "success"} for row in rows)
-    emit("data_quality_health", "pass" if ok else "fail", metric_count=len(rows), metrics=rows)
+
+    valid_statuses = {
+        "pass",
+        "passed",
+        "ok",
+        "success",
+    }
+
+    failed_metrics = [
+        row
+        for row in rows
+        if str(
+            row.get("status", "")
+        ).lower()
+        not in valid_statuses
+    ]
+
+    ok = not failed_metrics
+
+    emit(
+        "data_quality_health",
+        "pass" if ok else "fail",
+        metric_count=len(rows),
+        failed_metric_count=len(
+            failed_metrics
+        ),
+        metrics=rows,
+    )
+
     return ok
 
 
-def check_evaluations() -> bool:
+def check_stages() -> bool:
     sql = f"""
-    SELECT COUNT(*) AS evaluation_rows,
-           AVG(absolute_error) AS mae,
-           SQRT(AVG(squared_error)) AS rmse,
-           MAX(evaluated_at_utc) AS latest_evaluated_utc
-    FROM `{PROJECT_ID}.{CURATED_DATASET}.{EVALUATIONS_TABLE}`
-    WHERE forecast_timestamp_utc >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
+        SELECT *
+        FROM `{PROJECT_ID}.{MLOPS_DATASET}.v_latest_stage_health`
+        ORDER BY stage_name
     """
-    row = (query(sql) or [{}])[0]
-    count = int(row.get("evaluation_rows") or 0)
-    mae = float(row.get("mae")) if row.get("mae") is not None else None
-    rmse = float(row.get("rmse")) if row.get("rmse") is not None else None
-    evaluation_age = age_hours(row.get("latest_evaluated_utc"))
-    checks = {
-        "rows_ok": count > 0 or not FAIL_ON_MISSING_EVALUATION,
-        "freshness_ok": evaluation_age is None or evaluation_age <= MAX_EVALUATION_AGE_HOURS,
-        "mae_ok": mae is None or mae <= MAX_MAE,
-        "rmse_ok": rmse is None or rmse <= MAX_RMSE,
+
+    rows = query(sql)
+
+    if not rows:
+        emit(
+            "stage_health",
+            "fail",
+            reason="no_stage_health_rows",
+        )
+        return False
+
+    valid_statuses = {
+        "success",
+        "succeeded",
+        "ok",
+        "pass",
     }
+
+    failed_stages = [
+        row
+        for row in rows
+        if str(
+            row.get("status", "")
+        ).lower()
+        not in valid_statuses
+    ]
+
+    ok = not failed_stages
+
+    emit(
+        "stage_health",
+        "pass" if ok else "fail",
+        stage_count=len(rows),
+        failed_stage_count=len(
+            failed_stages
+        ),
+        stages=rows,
+    )
+
+    return ok
+
+
+def check_validation_evaluation() -> bool:
+    sql = f"""
+        SELECT *
+        FROM `{PROJECT_ID}.{MLOPS_DATASET}.v_latest_evaluation_health`
+        ORDER BY evaluated_at_utc DESC
+    """
+
+    rows = query(sql)
+
+    if not rows:
+        ok = not FAIL_ON_MISSING_EVALUATION
+
+        emit(
+            "validation_evaluation_health",
+            "pass" if ok else "fail",
+            reason="no_evaluation_health_rows",
+            max_age_hours=(
+                MAX_VALIDATION_EVALUATION_AGE_HOURS
+            ),
+        )
+
+        return ok
+
+    evaluation = rows[0]
+
+    evaluation_age = age_hours(
+        evaluation.get("evaluated_at_utc")
+    )
+
+    mae = (
+        float(evaluation["mae"])
+        if evaluation.get("mae") is not None
+        else None
+    )
+
+    rmse = (
+        float(evaluation["rmse"])
+        if evaluation.get("rmse") is not None
+        else None
+    )
+
+    checks = {
+        "available": (
+            evaluation.get("evaluation_status")
+            == "available"
+        ),
+        "freshness_ok": (
+            evaluation_age is None
+            or evaluation_age
+            <= MAX_VALIDATION_EVALUATION_AGE_HOURS
+        ),
+        "mae_ok": (
+            mae is None
+            or mae <= MAX_MAE
+        ),
+        "rmse_ok": (
+            rmse is None
+            or rmse <= MAX_RMSE
+        ),
+    }
+
     ok = all(checks.values())
-    emit("evaluation_health", "pass" if ok else "fail", checks=checks,
-         evaluation_rows=count, mae=mae, rmse=rmse, age_hours=evaluation_age)
+
+    emit(
+        "validation_evaluation_health",
+        "pass" if ok else "fail",
+        checks=checks,
+        age_hours=evaluation_age,
+        max_age_hours=(
+            MAX_VALIDATION_EVALUATION_AGE_HOURS
+        ),
+        mae=mae,
+        rmse=rmse,
+        evaluation=evaluation,
+    )
+
     return ok
 
 
 def main() -> int:
-    emit("watchdog_started", "ok", jobs={"daily": DAILY_JOB, "evaluation": EVALUATION_JOB, "training": TRAINING_JOB})
+    emit(
+        "watchdog_started",
+        "ok",
+        views={
+            "pipeline": (
+                f"{MLOPS_DATASET}."
+                "v_latest_pipeline_health_by_job"
+            ),
+            "quality": (
+                f"{MLOPS_DATASET}."
+                "v_latest_quality_health"
+            ),
+            "stage": (
+                f"{MLOPS_DATASET}."
+                "v_latest_stage_health"
+            ),
+            "validation_evaluation": (
+                f"{MLOPS_DATASET}."
+                "v_latest_evaluation_health"
+            ),
+        },
+    )
+
     try:
-        results = [check_predictions(), check_quality(), check_evaluations()]
+        results = [
+            check_pipeline(),
+            check_quality(),
+            check_stages(),
+            check_validation_evaluation(),
+        ]
     except Exception as exc:
-        emit("watchdog_failed", "fail", error=repr(exc))
+        emit(
+            "watchdog_failed",
+            "fail",
+            error=repr(exc),
+        )
         return 1
+
+    passed = sum(
+        1
+        for result in results
+        if result
+    )
+
     ok = all(results)
-    emit("watchdog_completed", "pass" if ok else "fail", checks_passed=sum(results), checks_total=len(results))
+
+    emit(
+        "watchdog_completed",
+        "pass" if ok else "fail",
+        checks_passed=passed,
+        checks_total=len(results),
+    )
+
     return 0 if ok else 1
 
 

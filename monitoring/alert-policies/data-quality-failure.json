@@ -1,15 +1,15 @@
 {
-  "displayName": "Rhine daily data-quality failure",
+  "displayName": "Rhine monitoring data-quality failure",
   "documentation": {
-    "content": "The latest daily pipeline reported one or more failed data-quality metrics. Check mlops.data_quality_metrics and the data_quality_checks stage.",
+    "content": "The monitoring watchdog detected one or more failed data-quality metrics. Check gauge24h-monitoring logs, mlops.data_quality_metrics, and the data_quality_checks stage.",
     "mimeType": "text/markdown"
   },
   "combiner": "OR",
   "conditions": [
     {
-      "displayName": "Data-quality failure count is greater than zero",
+      "displayName": "Monitoring data-quality failure count is greater than zero",
       "conditionThreshold": {
-        "filter": "metric.type=\"logging.googleapis.com/user/rhine_daily_pipeline_quality_failures\" resource.type=\"cloud_run_job\"",
+        "filter": "metric.type=\"logging.googleapis.com/user/rhine_monitoring_quality_failures\" resource.type=\"cloud_run_job\"",
         "comparison": "COMPARISON_GT",
         "thresholdValue": 0,
         "duration": "0s",

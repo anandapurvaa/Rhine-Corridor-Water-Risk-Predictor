@@ -1,9 +1,5 @@
--- ============================================================
--- Rhine Corridor Water Risk
--- MLOps monitoring views
--- ============================================================
+-- Rhine Corridor Water Risk: MLOps monitoring views
 
--- Latest pipeline run overall.
 CREATE OR REPLACE VIEW
   `rhine-corridor-navigator.mlops.v_latest_pipeline_health`
 AS
@@ -33,7 +29,6 @@ QUALIFY ROW_NUMBER() OVER (
 ) = 1;
 
 
--- Latest pipeline run for each job type.
 CREATE OR REPLACE VIEW
   `rhine-corridor-navigator.mlops.v_latest_pipeline_health_by_job`
 AS
@@ -64,7 +59,6 @@ QUALIFY ROW_NUMBER() OVER (
 ) = 1;
 
 
--- Latest data-quality result for each metric and scope.
 CREATE OR REPLACE VIEW
   `rhine-corridor-navigator.mlops.v_latest_quality_health`
 AS
@@ -72,12 +66,11 @@ SELECT
   run_id,
   metric_name,
   metric_scope,
-  ROUND(metric_value, 6) AS metric_value,
-  ROUND(threshold_value, 6) AS threshold_value,
+  ROUND(metric_value, 2) AS metric_value,
+  ROUND(threshold_value, 2) AS threshold_value,
   status,
   measured_at_utc,
-  details_json,
-  metrics_json
+  details_json
 FROM `rhine-corridor-navigator.mlops.data_quality_metrics`
 QUALIFY ROW_NUMBER() OVER (
   PARTITION BY metric_name, metric_scope
@@ -85,7 +78,6 @@ QUALIFY ROW_NUMBER() OVER (
 ) = 1;
 
 
--- Latest stage result for each stage.
 CREATE OR REPLACE VIEW
   `rhine-corridor-navigator.mlops.v_latest_stage_health`
 AS
@@ -111,7 +103,6 @@ QUALIFY ROW_NUMBER() OVER (
 ) = 1;
 
 
--- Daily pipeline summary.
 CREATE OR REPLACE VIEW
   `rhine-corridor-navigator.mlops.v_daily_pipeline_health`
 AS
@@ -119,13 +110,24 @@ SELECT
   DATE(started_at_utc) AS execution_date,
   COUNT(*) AS total_runs,
   COUNTIF(
-    LOWER(status) IN ('success', 'succeeded', 'ok', 'pass')
+    LOWER(status) IN (
+      'success',
+      'succeeded',
+      'ok',
+      'pass'
+    )
   ) AS successful_runs,
   COUNTIF(
-    LOWER(status) IN ('failed', 'failure', 'error')
+    LOWER(status) IN (
+      'failed',
+      'failure',
+      'error'
+    )
   ) AS failed_runs,
-  ROUND(AVG(duration_seconds), 2)
-    AS average_duration_seconds,
+  ROUND(
+    AVG(duration_seconds),
+    2
+  ) AS average_duration_seconds,
   MAX(rows_ingested) AS maximum_rows_ingested,
   MAX(rows_predicted) AS maximum_rows_predicted,
   MAX(stations_processed) AS maximum_stations_processed
@@ -134,20 +136,36 @@ GROUP BY execution_date
 ORDER BY execution_date DESC;
 
 
--- Latest quality summary for each run.
 CREATE OR REPLACE VIEW
   `rhine-corridor-navigator.mlops.v_latest_run_quality_summary`
 AS
 SELECT
   run_id,
   COUNT(*) AS metric_count,
-  COUNTIF(LOWER(status) IN ('pass', 'passed', 'success', 'ok'))
-    AS passed_metrics,
-  COUNTIF(LOWER(status) IN ('fail', 'failed', 'failure', 'error'))
-    AS failed_metrics,
+  COUNTIF(
+    LOWER(status) IN (
+      'pass',
+      'passed',
+      'success',
+      'ok'
+    )
+  ) AS passed_metrics,
+  COUNTIF(
+    LOWER(status) IN (
+      'fail',
+      'failed',
+      'failure',
+      'error'
+    )
+  ) AS failed_metrics,
   ARRAY_AGG(
     IF(
-      LOWER(status) IN ('fail', 'failed', 'failure', 'error'),
+      LOWER(status) IN (
+        'fail',
+        'failed',
+        'failure',
+        'error'
+      ),
       metric_name,
       NULL
     )
@@ -159,23 +177,16 @@ GROUP BY run_id
 ORDER BY last_measured_at_utc DESC;
 
 
--- Latest model-evaluation result for each split and model version.
---
--- model_evaluations has no status or threshold column.
--- Evaluation status is therefore represented as:
---   available = a row exists
---   unavailable = no row exists
 CREATE OR REPLACE VIEW
   `rhine-corridor-navigator.mlops.v_latest_evaluation_health`
 AS
 SELECT
-  run_id,
   model_version,
   split_name,
   evaluated_at_utc,
-  ROUND(mae, 6) AS mae,
-  ROUND(rmse, 6) AS rmse,
-  ROUND(mbe, 6) AS mbe,
+  ROUND(mae, 2) AS mae,
+  ROUND(rmse, 2) AS rmse,
+  ROUND(mbe, 2) AS mbe,
   mae_by_station,
   'available' AS evaluation_status
 FROM `rhine-corridor-navigator.mlops.model_evaluations`

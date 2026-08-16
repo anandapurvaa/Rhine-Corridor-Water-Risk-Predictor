@@ -5,26 +5,26 @@ steps:
     args:
       - "-c"
       - |
-        python -m compileall watchdog.py mlops
+        python -m compileall modeling mlops
 
   - name: "gcr.io/cloud-builders/docker"
-    id: "build-monitoring-image"
+    id: "build-training-image"
     args:
       - "build"
       - "-f"
-      - "Dockerfile.monitoring"
+      - "Dockerfile.train"
       - "-t"
       - "${_IMAGE}"
       - "."
 
   - name: "gcr.io/cloud-builders/docker"
-    id: "push-monitoring-image"
+    id: "push-training-image"
     args:
       - "push"
       - "${_IMAGE}"
 
   - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
-    id: "update-cloud-run-monitoring-job"
+    id: "update-training-job"
     entrypoint: "gcloud"
     args:
       - "run"
@@ -41,8 +41,8 @@ images:
 substitutions:
   _REGION: "europe-west3"
   _REPOSITORY: "gauge24h"
-  _JOB_NAME: "gauge24h-monitoring"
-  _IMAGE: "europe-west3-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/gauge24h-monitoring:build-${BUILD_ID}"
+  _JOB_NAME: "gauge24h-train"
+  _IMAGE: "europe-west3-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/gauge24h-train:build-${BUILD_ID}"
 
 options:
   dynamicSubstitutions: true

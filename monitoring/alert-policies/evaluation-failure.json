@@ -1,15 +1,15 @@
 {
-  "displayName": "Rhine daily pipeline failure",
+  "displayName": "Rhine prediction evaluation failure",
   "documentation": {
-    "content": "The rhine-daily-pipeline Cloud Run Job reported a pipeline failure. Check Cloud Run execution logs, mlops.pipeline_runs, and the daily pipeline execution.",
+    "content": "The monitoring watchdog detected an evaluation failure, stale evaluation result, missing evaluation rows, or an evaluation metric outside its configured threshold. Check mlops.model_evaluations, rhein_curated.gauge_24h_prediction_evaluations, and the evaluation Cloud Run Job.",
     "mimeType": "text/markdown"
   },
   "combiner": "OR",
   "conditions": [
     {
-      "displayName": "Daily pipeline failure count is greater than zero",
+      "displayName": "Evaluation failure count is greater than zero",
       "conditionThreshold": {
-        "filter": "metric.type=\"logging.googleapis.com/user/rhine_daily_pipeline_failures\" resource.type=\"cloud_run_job\"",
+        "filter": "metric.type=\"logging.googleapis.com/user/rhine_monitoring_evaluation_failures\" resource.type=\"cloud_run_job\"",
         "comparison": "COMPARISON_GT",
         "thresholdValue": 0,
         "duration": "0s",

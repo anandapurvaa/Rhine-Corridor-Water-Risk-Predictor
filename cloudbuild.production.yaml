@@ -53,7 +53,7 @@ substitutions:
   _REGION: "europe-west3"
   _REPOSITORY: "gauge24h"
   _JOB_NAME: "rhine-daily-pipeline"
-  _IMAGE: "europe-west3-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/rhine-daily-pipeline:commit-${SHORT_SHA}"
+  _IMAGE: "europe-west3-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/rhine-daily-pipeline:build-${BUILD_ID}"
 
 options:
   dynamicSubstitutions: true

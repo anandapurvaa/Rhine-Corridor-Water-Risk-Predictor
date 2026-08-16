@@ -25,7 +25,7 @@ from modeling.schemas import (
 MIN_REQUIRED_ROWS = 1000
 MIN_REQUIRED_STATIONS = 5
 HORIZON_HOURS = int(os.getenv("GAUGE24H_HORIZON_HOURS", "24"))
-TARGET_MODE = os.getenv("GAUGE24H_TARGET_MODE", "level").strip().lower()
+TARGET_MODE = os.getenv("GAUGE24H_TARGET_MODE", "delta").strip().lower()
 MAX_FEATURE_NULL_FRACTION = float(os.getenv("GAUGE24H_MAX_FEATURE_NULL_FRACTION", "0.35"))
 TRAIN_SPLIT_NAME = os.getenv("GAUGE24H_TRAIN_SPLIT_NAME", "train").strip().lower()
 

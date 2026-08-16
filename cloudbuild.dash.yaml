@@ -14,13 +14,14 @@ steps:
       - "-c"
       - |
         python -m pip install --upgrade pip
-        python -m pip install -r requirements.txt
+        python -m pip install --no-cache-dir -r requirements.txt
         python -m pytest -q
 
   - name: "gcr.io/cloud-builders/docker"
     id: "build-dash-image"
     args:
       - "build"
+      - "--no-cache"
       - "-f"
       - "Dockerfile.dash"
       - "-t"
@@ -45,12 +46,12 @@ steps:
       - "--image=${_IMAGE}"
       - "--platform=managed"
       - "--port=8080"
-      - "--set-env-vars=API_BASE_URL=https://gauge24h-api-360668288184.europe-west3.run.app,API_TIMEOUT_SECONDS=15,GAUGE24H_THRESHOLDS_PATH=/app/config/thresholds.yaml,GAUGE24H_SEGMENTS_PATH=/app/config/segments.yaml"
+      - "--set-env-vars=API_BASE_URL=https://gauge24h-api-360668288184.europe-west3.run.app,API_TIMEOUT_SECONDS=15,GAUGE24H_THRESHOLDS_PATH=/app/config/thresholds.yaml,GAUGE24H_SEGMENTS_PATH=/app/config/segments.yaml,GAUGE24H_OPERATIONAL_THRESHOLDS_PATH=/app/config/operational_thresholds.yaml"
       - "--memory=1Gi"
       - "--cpu=1"
       - "--timeout=300s"
-      - "--min=0"
-      - "--max=2"
+      - "--min-instances=0"
+      - "--max-instances=2"
 
 images:
   - "${_IMAGE}"
@@ -59,7 +60,7 @@ substitutions:
   _REGION: "europe-west3"
   _REPOSITORY: "gauge24h"
   _SERVICE_NAME: "gauge24h-dash"
-  _IMAGE: "europe-west3-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/rhine-gauge24h-dashboard:commit-${SHORT_SHA}"
+  _IMAGE: "europe-west3-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/gauge24h-dash:commit-${SHORT_SHA}"
 
 options:
   dynamicSubstitutions: true

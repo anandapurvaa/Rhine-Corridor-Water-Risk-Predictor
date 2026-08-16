@@ -6,7 +6,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
+import numpy as np
 import pandas as pd
 import yaml
 from fastapi import FastAPI, HTTPException, Query
@@ -76,28 +76,86 @@ def cache_set(key: str, value: Any, ttl_seconds: int = CACHE_TTL_SECONDS) -> Non
         _cache[key] = (time.monotonic() + ttl_seconds, value)
 
 
-def normalize_timestamp_series(series: pd.Series) -> pd.Series:
-    return pd.to_datetime(series, utc=True, errors="coerce").map(
-        lambda value: value.isoformat() if pd.notna(value) else None
+def normalize_timestamp(series: pd.Series) -> pd.Series:
+    """
+    Normalize timestamps to UTC and remove sub-second precision.
+
+    BigQuery TIMESTAMP supports microseconds, but this pipeline only
+    needs second-level precision. Removing fractions also keeps the
+    table preview readable and avoids mixed timestamp representations.
+    """
+    parsed = pd.to_datetime(
+        series,
+        utc=True,
+        errors="coerce",
     )
 
+    # Force nanosecond resolution to prevent pd.merge_asof dtype mismatch errors
+    return parsed.dt.floor("s").astype("datetime64[ns, UTC]")
 
-def clean_records(df: pd.DataFrame) -> list[dict[str, Any]]:
+
+def json_safe_value(value: Any) -> Any:
+    if value is None:
+        return None
+
+    if isinstance(value, np.ndarray):
+        return [json_safe_value(item) for item in value.tolist()]
+
+    if isinstance(value, (list, tuple)):
+        return [json_safe_value(item) for item in value]
+
+    if isinstance(value, dict):
+        return {
+            str(key): json_safe_value(item)
+            for key, item in value.items()
+        }
+
+    if isinstance(value, np.generic):
+        return json_safe_value(value.item())
+
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+
+    if isinstance(value, datetime):
+        return value.isoformat()
+
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+
+    return value
+
+
+def clean_records_df(df: pd.DataFrame) -> list[dict[str, Any]]:
     if df.empty:
         return []
+
     result = df.copy()
-    for column in [
-        "timestamp_utc", "forecast_timestamp_utc", "prediction_ready_utc",
-        "prediction_timestamp_utc", "actual_available_utc", "evaluated_at_utc",
-        "measured_at_utc", "started_at_utc", "ended_at_utc", "created_at_utc",
-        "last_measured_at_utc",
-    ]:
+
+    timestamp_columns = [
+        "timestamp_utc",
+        "forecast_timestamp_utc",
+        "prediction_ready_utc",
+        "prediction_timestamp_utc",
+        "actual_available_utc",
+        "evaluated_at_utc",
+        "measured_at_utc",
+    ]
+
+    for column in timestamp_columns:
         if column in result.columns:
-            result[column] = normalize_timestamp_series(result[column])
-    result = result.where(pd.notna(result), None)
+            result[column] = normalize_timestamp(result[column])
+
+    records = result.to_dict(orient="records")
+
     return [
-        {key: value.item() if hasattr(value, "item") else value for key, value in row.items()}
-        for row in result.to_dict(orient="records")
+        {
+            str(key): json_safe_value(value)
+            for key, value in record.items()
+        }
+        for record in records
     ]
 
 
@@ -239,7 +297,7 @@ def get_latest_predictions() -> list[dict[str, Any]]:
     """
     params = [bigquery.ScalarQueryParameter("run_id", "STRING", run_id)]
     try:
-        records = clean_records(attach_segment_metadata(run_query(query, params)))
+        records = clean_records_df(attach_segment_metadata(run_query(query, params)))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"BigQuery error: {exc}") from exc
     cache_set(key, records)
@@ -282,7 +340,7 @@ def get_predictions_history(
                 allowed.update(normalize_station_name(g) for g in [item.get("decision_gauge", "")] + item.get("support_gauges", []) if g)
         if allowed:
             df = df[df["station_name"].astype(str).map(normalize_station_name).isin(allowed)].copy()
-    records = clean_records(attach_segment_metadata(df))
+    records = clean_records_df(attach_segment_metadata(df))
     cache_set(key, records)
     return records
 
@@ -307,7 +365,7 @@ def get_station_metadata() -> list[dict[str, Any]]:
     df["segment_ids"] = normalized.map(lambda x: [m["segment_id"] for m in lookup.get(x, [])])
     df["segment_labels"] = normalized.map(lambda x: [m["segment_label"] for m in lookup.get(x, [])])
     df["is_decision_gauge"] = normalized.map(lambda x: any(m["is_decision_gauge"] for m in lookup.get(x, [])))
-    records = clean_records(df)
+    records = clean_records_df(df)
     cache_set(key, records, 3600)
     return records
 
@@ -326,25 +384,71 @@ def get_system_status() -> dict[str, Any]:
         "evaluation": f"SELECT * FROM `{table_id(MLOPS_DATASET, LATEST_EVALUATION_HEALTH_VIEW)}` ORDER BY evaluated_at_utc DESC LIMIT 1",
     }
     try:
-        data = {name: clean_records(run_query(query)) for name, query in queries.items()}
+        data = {name: clean_records_df(run_query(query)) for name, query in queries.items()}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Monitoring views unavailable: {exc}") from exc
     pipeline = data["pipeline"]
     quality = data["quality"]
     stages = data["stage"]
+    quality_summary = data["quality_summary"][0] if data["quality_summary"] else {}
     evaluation = data["evaluation"]
+
     good_pipeline = {"success", "succeeded", "ok", "pass"}
     good_quality = {"pass", "passed", "success", "ok"}
-    pipeline_status = "pass" if pipeline and all(str(x.get("status", "")).lower() in good_pipeline for x in pipeline) else "unknown"
-    quality_status = "pass" if quality and all(str(x.get("status", "")).lower() in good_quality for x in quality) else "unknown"
-    stage_status = "pass" if stages and all(str(x.get("status", "")).lower() in good_pipeline for x in stages) else "unknown"
-    evaluation_status = evaluation[0].get("evaluation_status", "unknown") if evaluation else "unknown"
-    if any(str(x).lower() in {"fail", "failed", "error"} for x in [pipeline_status, quality_status, stage_status, evaluation_status]):
-        overall = "degraded"
-    elif not pipeline or not quality or not stages:
-        overall = "degraded"
+    good_evaluation = {"available", "pass", "passed", "success", "ok"}
+
+    pipeline_status = (
+        "pass"
+        if pipeline
+        and all(
+            str(row.get("status", "")).strip().lower() in good_pipeline
+            for row in pipeline
+        )
+        else "unknown"
+    )
+
+    stage_status = (
+        "pass"
+        if stages
+        and all(
+            str(row.get("status", "")).strip().lower() in good_pipeline
+            for row in stages
+        )
+        else "unknown"
+    )
+
+    passed_metrics = int(quality_summary.get("passed_metrics", 0) or 0)
+    failed_metrics = int(quality_summary.get("failed_metrics", 0) or 0)
+    metric_count = int(quality_summary.get("metric_count", 0) or 0)
+
+    if metric_count > 0 and failed_metrics == 0 and passed_metrics == metric_count:
+        quality_status = "pass"
+    elif failed_metrics > 0:
+        quality_status = "fail"
     else:
+        quality_status = "unknown"
+
+    evaluation_status = (
+        str(evaluation[0].get("evaluation_status", "unknown")).strip().lower()
+        if evaluation
+        else "unknown"
+    )
+
+    status_values = {
+        pipeline_status,
+        quality_status,
+        stage_status,
+        evaluation_status,
+    }
+
+    if "fail" in status_values or "failed" in status_values or "error" in status_values:
+        overall = "degraded"
+    elif not pipeline or not stages or not quality_summary or not evaluation:
+        overall = "degraded"
+    elif all(value in {"ok", "pass", "available"} for value in status_values):
         overall = "ok"
+    else:
+        overall = "degraded"
     payload = {
         "status": overall,
         "project_id": PROJECT_ID,
@@ -358,7 +462,7 @@ def get_system_status() -> dict[str, Any]:
         "latest_pipeline_health": pipeline,
         "latest_quality_health": quality,
         "latest_stage_health": stages,
-        "latest_quality_summary": data["quality_summary"][0] if data["quality_summary"] else {},
+        "latest_quality_summary": quality_summary,
         "latest_evaluation": evaluation[0] if evaluation else {},
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
     }
@@ -382,7 +486,7 @@ def get_evaluation_history(days: int = Query(default=30, ge=1, le=365), station:
         params.append(bigquery.ScalarQueryParameter("station_pattern", "STRING", f"%{station}%"))
     query += " ORDER BY station_name, forecast_timestamp_utc"
     try:
-        records = clean_records(run_query(query, params))
+        records = clean_records_df(run_query(query, params))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Evaluation table unavailable: {exc}") from exc
     cache_set(key, records)
@@ -406,7 +510,7 @@ def get_evaluation_metrics(days: int = Query(default=30, ge=1, le=365)) -> list[
         GROUP BY station_name ORDER BY mae ASC
     """
     try:
-        records = clean_records(run_query(query, [bigquery.ScalarQueryParameter("days", "INT64", days)]))
+        records = clean_records_df(run_query(query, [bigquery.ScalarQueryParameter("days", "INT64", days)]))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Evaluation table unavailable: {exc}") from exc
     cache_set(key, records)

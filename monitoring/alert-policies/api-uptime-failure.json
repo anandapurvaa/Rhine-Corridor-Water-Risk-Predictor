@@ -1,0 +1,35 @@
+{
+  "displayName": "Rhine Gauge24h API uptime failure",
+  "documentation": {
+    "content": "The gauge24h-api Cloud Run service failed its public /health uptime check. Check Cloud Run service logs, API readiness, and BigQuery connectivity.",
+    "mimeType": "text/markdown"
+  },
+  "combiner": "OR",
+  "conditions": [
+    {
+      "displayName": "API health check is failing",
+      "conditionThreshold": {
+        "filter": "metric.type=\"monitoring.googleapis.com/uptime_check/check_passed\" resource.type=\"uptime_url\"",
+        "comparison": "COMPARISON_LT",
+        "thresholdValue": 1,
+        "duration": "300s",
+        "aggregations": [
+          {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_FRACTION_TRUE"
+          }
+        ],
+        "trigger": {
+          "count": 1
+        }
+      }
+    }
+  ],
+  "notificationChannels": [
+    "projects/rhine-corridor-navigator/notificationChannels/5841203484534699387"
+  ],
+  "alertStrategy": {
+    "autoClose": "86400s"
+  },
+  "enabled": true
+}

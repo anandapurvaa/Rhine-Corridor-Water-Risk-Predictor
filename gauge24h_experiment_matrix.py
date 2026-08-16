@@ -21,69 +21,9 @@ BASE_ENV = {
 
 EXPERIMENTS = [
     {
-        "name": "global_delta_24h",
-        "module": (
-            "modeling.backtest_walkforward_gauge_24h"
-        ),
-        "env": {
-            **BASE_ENV,
-            "GAUGE24H_HORIZON_HOURS": "24",
-            "GAUGE24H_TARGET_MODE": "delta",
-            "GAUGE24H_FEATURE_SET": "default",
-        },
-    },
-    {
-        "name": "cluster_delta_24h",
-        "module": (
-            "modeling.backtest_walkforward_gauge_24h_cluster"
-        ),
-        "env": {
-            **BASE_ENV,
-            "GAUGE24H_HORIZON_HOURS": "24",
-            "GAUGE24H_TARGET_MODE": "delta",
-            "GAUGE24H_FEATURE_SET": "default",
-        },
-    },
-    {
-        "name": "global_level_24h",
-        "module": (
-            "modeling.backtest_walkforward_gauge_24h"
-        ),
-        "env": {
-            **BASE_ENV,
-            "GAUGE24H_HORIZON_HOURS": "24",
-            "GAUGE24H_TARGET_MODE": "level",
-            "GAUGE24H_FEATURE_SET": "default",
-        },
-    },
-    {
-        "name": "cluster_level_24h",
-        "module": (
-            "modeling.backtest_walkforward_gauge_24h_cluster"
-        ),
-        "env": {
-            **BASE_ENV,
-            "GAUGE24H_HORIZON_HOURS": "24",
-            "GAUGE24H_TARGET_MODE": "level",
-            "GAUGE24H_FEATURE_SET": "default",
-        },
-    },
-    {
         "name": "global_delta_simple_24h",
         "module": (
             "modeling.backtest_walkforward_gauge_24h"
-        ),
-        "env": {
-            **BASE_ENV,
-            "GAUGE24H_HORIZON_HOURS": "24",
-            "GAUGE24H_TARGET_MODE": "delta",
-            "GAUGE24H_FEATURE_SET": "simple",
-        },
-    },
-    {
-        "name": "cluster_delta_simple_24h",
-        "module": (
-            "modeling.backtest_walkforward_gauge_24h_cluster"
         ),
         "env": {
             **BASE_ENV,

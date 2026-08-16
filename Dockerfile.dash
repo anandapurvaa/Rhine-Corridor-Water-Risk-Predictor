@@ -1,12 +1,23 @@
 FROM python:3.11-slim
 
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    PORT=8080 \
+    API_BASE_URL=https://gauge24h-api-360668288184.europe-west3.run.app \
+    API_TIMEOUT_SECONDS=15 \
+    GAUGE24H_THRESHOLDS_PATH=/app/config/thresholds.yaml \
+    GAUGE24H_SEGMENTS_PATH=/app/config/segments.yaml \
+    GAUGE24H_OPERATIONAL_THRESHOLDS_PATH=/app/config/operational_thresholds.yaml
+
 WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY requirements.txt ./
+
 RUN python -m pip install --upgrade pip \
     && python -m pip install --no-cache-dir -r requirements.txt
 
@@ -15,14 +26,10 @@ COPY api/ ./api/
 COPY dash_app/ ./dash_app/
 COPY config/ ./config/
 
-ENV GAUGE24H_OPERATIONAL_THRESHOLDS_PATH=/app/config/operational_thresholds.yaml
-ENV PYTHONPATH=/app \
-    GAUGE24H_THRESHOLDS_PATH=/app/config/thresholds.yaml \
-    GAUGE24H_SEGMENTS_PATH=/app/config/segments.yaml \
-    API_BASE_URL=https://gauge24h-api-360668288184.europe-west3.run.app \
-    API_TIMEOUT_SECONDS=15
-
-RUN python -m compileall modeling api dash_app
+RUN test -f /app/dash_app/app.py \
+    && test -f /app/config/thresholds.yaml \
+    && test -f /app/config/segments.yaml \
+    && python -m compileall modeling api dash_app
 
 EXPOSE 8080
 
